@@ -205,7 +205,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
             if res.get('status') == 'success':
                 leads_ref.child(target_key).update({'status': 'sent', 'sent_at': datetime.now().isoformat(), 'processing_by': None})
                 logger.info(f"✅ Sent: {data.get('email')}")
-                await asyncio.sleep(random.randint(30, 90))
+                await asyncio.sleep(random.randint(120, 300))
             else:
                 leads_ref.child(target_key).update({'processing_by': None})
                 await asyncio.sleep(5)
