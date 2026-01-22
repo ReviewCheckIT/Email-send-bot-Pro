@@ -58,7 +58,7 @@ def home():
     return "Bot is Alive & Running!", 200
 
 def run_flask():
-    # Flask will listen on the PORT provided by Render
+    # Flask runs on the PORT provided by Render to keep the service alive
     app.run(host="0.0.0.0", port=PORT)
 
 # --- Firebase Init ---
@@ -166,8 +166,8 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
     while IS_SENDING:
         try:
             # [FIXED QUERY]
-            # equal_to(None) বাদ দেওয়া হয়েছে। 
-            # Firebase এ null ভ্যালুগুলো সবার আগে থাকে, তাই limit_to_first(50) দিলেই আনসেন্ড ইমেইলগুলো আসবে।
+            # Removed .equal_to(None) to fix Firebase error.
+            # Null values come first in order_by_child, so limit_to_first works.
             query = leads_ref.order_by_child('status').limit_to_first(50).get()
             
             if not query:
@@ -180,7 +180,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
 
             # 2. LOCKING MECHANISM
             for key, val in query.items():
-                # [SAFETY CHECK] যদি কুয়েরি ভুলে 'sent' ডাটা নিয়ে আসে, সেটা স্কিপ করবে
+                # [SAFETY CHECK] Skip if status is already set (sent/opened)
                 if val.get('status') is not None:
                     continue
 
@@ -193,7 +193,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
                     break
             
             if not target_key:
-                # fetched 50 items are either sent or busy
+                # All fetched items are busy or sent
                 await asyncio.sleep(10) 
                 continue
 
@@ -280,7 +280,7 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     # 1. Start Flask in background thread
-    # এটি পোর্ট 10000 দখল করবে এবং Render-কে সন্তুষ্ট রাখবে (Uptime)
+    # This keeps Render happy by listening on the correct PORT
     threading.Thread(target=run_flask, daemon=True).start()
     
     # 2. Setup Bot Application
@@ -290,8 +290,8 @@ def main():
     
     logger.info("🤖 Bot is starting in POLLING mode...")
 
-    # 3. Run Bot using Polling (No Port needed for this part)
-    # Webhook এর বদলে Polling ব্যবহার করছি যাতে Port Conflict না হয়
+    # 3. Run Bot using Polling
+    # drop_pending_updates=True helps fix conflict errors on restart
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
