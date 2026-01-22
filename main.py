@@ -58,16 +58,21 @@ def home():
     return "Bot is Alive & Running!", 200
 
 def run_flask():
+    # Flask will listen on the PORT provided by Render
     app.run(host="0.0.0.0", port=PORT)
 
 # --- Firebase Init ---
 if not firebase_admin._apps:
     if FB_JSON:
-        if os.path.exists(FB_JSON):
-            cred = credentials.Certificate(FB_JSON)
-        else:
-            cred = credentials.Certificate(json.loads(FB_JSON))
-        firebase_admin.initialize_app(cred, {'databaseURL': FB_URL})
+        try:
+            if os.path.exists(FB_JSON):
+                cred = credentials.Certificate(FB_JSON)
+            else:
+                cred = credentials.Certificate(json.loads(FB_JSON))
+            firebase_admin.initialize_app(cred, {'databaseURL': FB_URL})
+            logger.info("🔥 Firebase Connected!")
+        except Exception as e:
+            logger.error(f"❌ Firebase Auth Error: {e}")
     else:
         logger.error("❌ FIREBASE_CREDENTIALS_JSON missing!")
 
@@ -98,6 +103,7 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name):
         api_key = get_next_gemini_key()
         if not api_key: break
 
+        # Using gemini-2.0-flash-exp or falling back to 1.5-flash if needed
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
         
         prompt = f"""
@@ -147,15 +153,19 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     bot_id = TOKEN.split(':')[0]
     
-    leads_ref = db.reference('scraped_emails')
-    config_ref = db.reference('shared_config/email_template')
+    try:
+        leads_ref = db.reference('scraped_emails')
+        config_ref = db.reference('shared_config/email_template')
+    except Exception as e:
+        logger.error(f"DB Ref Error: {e}")
+        IS_SENDING = False
+        return
 
     await context.bot.send_message(chat_id, "🚀 Bot Started: Scanning for leads...")
 
     while IS_SENDING:
         try:
             # 1. OPTIMIZED FETCH: Only fetch leads where status is None (Limit 50 to save bandwidth)
-            # This prevents fetching 30k leads every loop.
             query = leads_ref.order_by_child('status').equal_to(None).limit_to_first(50).get()
             
             if not query:
@@ -204,9 +214,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
             )
 
             # 6. INJECT TRACKING & SPAM PROTECTION
-            # We use the FIRST GAS URL for tracking pixel to keep it consistent, or rotate if needed.
             track_base = GAS_URL_POOL[0] if GAS_URL_POOL else ""
-            # Ensure URL ends correctly for query params
             sep = "&" if "?" in track_base else "?"
             pixel_url = f"{track_base}{sep}action=track&id={target_key}"
             
@@ -254,24 +262,30 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data == 'start':
         if not IS_SENDING:
             IS_SENDING = True
-            context.job_queue.run_once(email_worker, 1, chat_id=q.message.chat_id)
-            await q.edit_message_text("✅ Bot Started.")
+            if context.job_queue:
+                context.job_queue.run_once(email_worker, 1, chat_id=q.message.chat_id)
+                await q.edit_message_text("✅ Bot Started.")
+            else:
+                await q.edit_message_text("❌ JobQueue not available.")
     elif q.data == 'stop':
         IS_SENDING = False
         await q.edit_message_text("🛑 Bot Stopping...")
 
 def main():
-    # Start Flask in background thread
+    # 1. Start Flask in background thread
+    # এটি পোর্ট 10000 দখল করবে এবং Render-কে সন্তুষ্ট রাখবে (Uptime)
     threading.Thread(target=run_flask, daemon=True).start()
     
+    # 2. Setup Bot Application
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(cb_handler))
     
-    if RENDER_URL:
-        app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"{RENDER_URL}/{TOKEN}")
-    else:
-        app.run_polling()
+    logger.info("🤖 Bot is starting in POLLING mode...")
+
+    # 3. Run Bot using Polling (No Port needed for this part)
+    # Webhook এর বদলে Polling ব্যবহার করছি যাতে Port Conflict না হয়
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
