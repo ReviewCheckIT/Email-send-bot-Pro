@@ -165,11 +165,13 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
 
     while IS_SENDING:
         try:
-            # 1. OPTIMIZED FETCH: Only fetch leads where status is None (Limit 50 to save bandwidth)
-            query = leads_ref.order_by_child('status').equal_to(None).limit_to_first(50).get()
+            # [FIXED QUERY]
+            # equal_to(None) বাদ দেওয়া হয়েছে। 
+            # Firebase এ null ভ্যালুগুলো সবার আগে থাকে, তাই limit_to_first(50) দিলেই আনসেন্ড ইমেইলগুলো আসবে।
+            query = leads_ref.order_by_child('status').limit_to_first(50).get()
             
             if not query:
-                await context.bot.send_message(chat_id, "💤 No new leads found. Waiting...")
+                await context.bot.send_message(chat_id, "💤 No leads found. Waiting...")
                 await asyncio.sleep(60)
                 continue
 
@@ -178,6 +180,10 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
 
             # 2. LOCKING MECHANISM
             for key, val in query.items():
+                # [SAFETY CHECK] যদি কুয়েরি ভুলে 'sent' ডাটা নিয়ে আসে, সেটা স্কিপ করবে
+                if val.get('status') is not None:
+                    continue
+
                 p_by = val.get('processing_by')
                 l_ping = val.get('last_ping', 0)
                 
@@ -187,7 +193,8 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
                     break
             
             if not target_key:
-                await asyncio.sleep(10) # All 50 fetched are busy, wait a bit
+                # fetched 50 items are either sent or busy
+                await asyncio.sleep(10) 
                 continue
 
             # 3. ACQUIRE LOCK
