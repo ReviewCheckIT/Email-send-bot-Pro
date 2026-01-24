@@ -109,11 +109,8 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-                # আগের prompt মুছে দিয়ে এই প্রফেশনাল প্রম্পটটি বসান:
-                # ১. আগে প্রম্পট ডিফাইন করবেন
+                        # ১. প্রম্পট ডিফাইন করা (নিশ্চিত করুন শেষে ব্র্যাকেট ) আছে)
         prompt = (
-            f"You are a High-Level App Marketing Specialist. Your task is to rewrite a sales email for the app '{app_name}'.\n"
-                prompt = (
             f"You are a professional App Growth Consultant. Your goal is to rewrite a cold email for the app '{app_name}'.\n"
             f"STRATEGY: Focus on 'Social Proof', 'User Credibility', and 'Trust Gap'. Avoid direct aggressive sales words like 'Buy Reviews'. Use 'Organic Engagement' or 'Authentic Feedback' instead.\n"
             f"RULES:\n"
@@ -123,8 +120,9 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
             f"4. FORMAT: Subject: [Catchy Professional Subject] ||| Body: [Rewritten HTML Body]\n\n"
             f"Original Subject: {original_sub}\n"
             f"Original Body: {original_body}"
-        )
-        # ২. তারপর এই পেলোড (payload) লাইনটি অবশ্যই থাকতে হবে (এটি আপনি মিস করেছেন)
+        )  # <--- এই ব্র্যাকেটটি ক্লোজ করা নিশ্চিত করুন
+
+        # ২. পেলোড (payload)
         payload = {
             "model": "llama-3.3-70b-versatile", 
             "messages": [{"role": "user", "content": prompt}], 
