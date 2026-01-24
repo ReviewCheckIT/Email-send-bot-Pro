@@ -124,7 +124,6 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
             f"Original Subject: {original_sub}\n"
             f"Original Body: {original_body}"
         )
-
         # ২. তারপর এই পেলোড (payload) লাইনটি অবশ্যই থাকতে হবে (এটি আপনি মিস করেছেন)
         payload = {
             "model": "llama-3.3-70b-versatile", 
