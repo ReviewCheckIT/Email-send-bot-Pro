@@ -113,12 +113,14 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
                 # ১. আগে প্রম্পট ডিফাইন করবেন
         prompt = (
             f"You are a High-Level App Marketing Specialist. Your task is to rewrite a sales email for the app '{app_name}'.\n"
-            f"GOAL: Persuade the developer that their app is losing users because of 0 reviews, and they MUST buy/get authentic reviews to grow.\n"
+                prompt = (
+            f"You are a professional App Growth Consultant. Your goal is to rewrite a cold email for the app '{app_name}'.\n"
+            f"STRATEGY: Focus on 'Social Proof', 'User Credibility', and 'Trust Gap'. Avoid direct aggressive sales words like 'Buy Reviews'. Use 'Organic Engagement' or 'Authentic Feedback' instead.\n"
             f"RULES:\n"
-            f"1. STRICT: You MUST keep the EXACT HTML tags, inline styles, <div> structures, and colors. Do NOT remove the button or the layout.\n"
-            f"2. TONE: Professional, urgent, and growth-oriented. Focus on 'Social Proof' and 'Trust Gap'.\n"
-            f"3. LINKS: Keep all contact info (WhatsApp, Telegram, Portfolio) and the CTA button link exactly as provided.\n"
-            f"4. FORMAT: Subject: [New Subject] ||| Body: [The rewritten HTML Body]\n\n"
+            f"1. STRICT: You MUST keep the EXACT HTML layout, styles, <div>, and the Telegram button. Only rewrite the text content inside the tags.\n"
+            f"2. TONE: Persuasive but polite. Make the developer feel that they NEED more user engagement to succeed.\n"
+            f"3. SPAM PROTECTION: Do not use excessive capital letters or typical spammy marketing phrases. Keep it human-like.\n"
+            f"4. FORMAT: Subject: [Catchy Professional Subject] ||| Body: [Rewritten HTML Body]\n\n"
             f"Original Subject: {original_sub}\n"
             f"Original Body: {original_body}"
         )
