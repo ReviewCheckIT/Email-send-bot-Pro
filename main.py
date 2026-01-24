@@ -109,25 +109,8 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-                        # ১. প্রম্পট ডিফাইন করা (নিশ্চিত করুন শেষে ব্র্যাকেট ) আছে)
-        prompt = (
-            f"You are a professional App Growth Consultant. Your goal is to rewrite a cold email for the app '{app_name}'.\n"
-            f"STRATEGY: Focus on 'Social Proof', 'User Credibility', and 'Trust Gap'. Avoid direct aggressive sales words like 'Buy Reviews'. Use 'Organic Engagement' or 'Authentic Feedback' instead.\n"
-            f"RULES:\n"
-            f"1. STRICT: You MUST keep the EXACT HTML layout, styles, <div>, and the Telegram button. Only rewrite the text content inside the tags.\n"
-            f"2. TONE: Persuasive but polite. Make the developer feel that they NEED more user engagement to succeed.\n"
-            f"3. SPAM PROTECTION: Do not use excessive capital letters or typical spammy marketing phrases. Keep it human-like.\n"
-            f"4. FORMAT: Subject: [Catchy Professional Subject] ||| Body: [Rewritten HTML Body]\n\n"
-            f"Original Subject: {original_sub}\n"
-            f"Original Body: {original_body}"
-        )  # <--- এই ব্র্যাকেটটি ক্লোজ করা নিশ্চিত করুন
-
-        # ২. পেলোড (payload)
-        payload = {
-            "model": "llama-3.3-70b-versatile", 
-            "messages": [{"role": "user", "content": prompt}], 
-            "temperature": 0.8
-        }
+        prompt = f"Rewrite email for '{app_name}'. RULES: Professional tone, Keep links. Format: Subject: [New Subject] ||| Body: [New Body]\nSub: {original_sub}\nBody: {original_body}"
+        payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.8}
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -211,7 +194,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
         
         if res.get("status") == "success":
             leads_ref.child(target_key).update({'status': 'sent', 'sent_at': datetime.now().isoformat(), 'sent_by': BOT_ID_PREFIX, 'processing_by': None})
-            await asyncio.sleep(random.randint(240, 360))
+            await asyncio.sleep(random.randint(180, 300))
         else:
             leads_ref.child(target_key).update({'processing_by': None})
             await notify_owner(context, f"ইমেইল পাঠাতে ব্যর্থ: {target_data.get('email')}\nGAS স্ক্রিপ্ট লগ চেক করুন।")
