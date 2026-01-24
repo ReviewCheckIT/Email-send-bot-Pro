@@ -109,8 +109,18 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-        prompt = f"Rewrite email for '{app_name}'. RULES: Professional tone, Keep links. Format: Subject: [New Subject] ||| Body: [New Body]\nSub: {original_sub}\nBody: {original_body}"
-        payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.8}
+                # আগের prompt মুছে দিয়ে এই প্রফেশনাল প্রম্পটটি বসান:
+        prompt = (
+            f"You are a High-Level App Marketing Specialist. Your task is to rewrite a sales email for the app '{app_name}'.\n"
+            f"GOAL: Persuade the developer that their app is losing users because of 0 reviews, and they MUST buy/get authentic reviews to grow.\n"
+            f"RULES:\n"
+            f"1. STRICT: You MUST keep the EXACT HTML tags, inline styles, <div> structures, and colors. Do NOT remove the button or the layout.\n"
+            f"2. TONE: Professional, urgent, and growth-oriented. Focus on 'Social Proof' and 'Trust Gap'.\n"
+            f"3. LINKS: Keep all contact info (WhatsApp, Telegram, Portfolio) and the CTA button link exactly as provided.\n"
+            f"4. FORMAT: Subject: [New Subject] ||| Body: [The rewritten HTML Body]\n\n"
+            f"Original Subject: {original_sub}\n"
+            f"Original Body: {original_body}"
+        )
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
