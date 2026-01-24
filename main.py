@@ -214,7 +214,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
         
         if res.get("status") == "success":
             leads_ref.child(target_key).update({'status': 'sent', 'sent_at': datetime.now().isoformat(), 'sent_by': BOT_ID_PREFIX, 'processing_by': None})
-            await asyncio.sleep(random.randint(180, 300))
+            await asyncio.sleep(random.randint(240, 360))
         else:
             leads_ref.child(target_key).update({'processing_by': None})
             await notify_owner(context, f"ইমেইল পাঠাতে ব্যর্থ: {target_data.get('email')}\nGAS স্ক্রিপ্ট লগ চেক করুন।")
