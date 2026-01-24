@@ -110,6 +110,7 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
                 # আগের prompt মুছে দিয়ে এই প্রফেশনাল প্রম্পটটি বসান:
+                # ১. আগে প্রম্পট ডিফাইন করবেন
         prompt = (
             f"You are a High-Level App Marketing Specialist. Your task is to rewrite a sales email for the app '{app_name}'.\n"
             f"GOAL: Persuade the developer that their app is losing users because of 0 reviews, and they MUST buy/get authentic reviews to grow.\n"
@@ -121,6 +122,13 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
             f"Original Subject: {original_sub}\n"
             f"Original Body: {original_body}"
         )
+
+        # ২. তারপর এই পেলোড (payload) লাইনটি অবশ্যই থাকতে হবে (এটি আপনি মিস করেছেন)
+        payload = {
+            "model": "llama-3.3-70b-versatile", 
+            "messages": [{"role": "user", "content": prompt}], 
+            "temperature": 0.8
+        }
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
