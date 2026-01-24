@@ -109,8 +109,24 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-        prompt = f"Rewrite email for '{app_name}'. RULES: Professional tone, Keep links. Format: Subject: [New Subject] ||| Body: [New Body]\nSub: {original_sub}\nBody: {original_body}"
-        payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.8}
+        # AI-কে দেওয়া শক্তিশালী নির্দেশাবলী (Advanced Prompt) - UPDATED
+        prompt = (
+            f"You are a professional App Growth Consultant. Your goal is to rewrite a cold email for the app '{app_name}'.\n"
+            f"STRATEGY: Focus on 'Social Proof', 'User Credibility', and 'Trust Gap'. Avoid direct aggressive sales words like 'Buy Reviews'. Use 'Organic Engagement' or 'Authentic Feedback' instead.\n"
+            f"RULES:\n"
+            f"1. STRICT: You MUST keep the EXACT HTML layout, styles, <div>, and the Telegram button. Only rewrite the text content inside the tags.\n"
+            f"2. TONE: Persuasive but polite. Make the developer feel that they NEED more user engagement to succeed.\n"
+            f"3. SPAM PROTECTION: Do not use excessive capital letters or typical spammy marketing phrases. Keep it human-like.\n"
+            f"4. FORMAT: Subject: [Catchy Professional Subject] ||| Body: [Rewritten HTML Body]\n\n"
+            f"Original Subject: {original_sub}\n"
+            f"Original Body: {original_body}"
+        )
+
+        payload = {
+            "model": "llama-3.3-70b-versatile", 
+            "messages": [{"role": "user", "content": prompt}], 
+            "temperature": 0.8
+        }
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -194,7 +210,8 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
         
         if res.get("status") == "success":
             leads_ref.child(target_key).update({'status': 'sent', 'sent_at': datetime.now().isoformat(), 'sent_by': BOT_ID_PREFIX, 'processing_by': None})
-            await asyncio.sleep(random.randint(180, 300))
+            # টাইমার বাড়ানো হয়েছে স্পাম রোধে (৫-৬ মিনিট)
+            await asyncio.sleep(random.randint(300, 360))
         else:
             leads_ref.child(target_key).update({'processing_by': None})
             await notify_owner(context, f"ইমেইল পাঠাতে ব্যর্থ: {target_data.get('email')}\nGAS স্ক্রিপ্ট লগ চেক করুন।")
@@ -208,7 +225,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", reply_markup=InlineKeyboardMarkup([
         [InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],
         [InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],
-        [InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')]
+        [InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],
+        [InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')]
     ]))
 
 async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -236,6 +254,47 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"📊 স্ট্যাটাস: মোট ইমেইল {len(leads)}, পাঠানো হয়েছে {sent}")
         except:
             await notify_owner(context, "স্ট্যাটাস দেখাতে সমস্যা হচ্ছে। ফায়ারবেস কানেকশন চেক করুন।")
+            
+    elif query.data == 'btn_spam_check':
+        context.user_data['awaiting_test_email'] = True
+        await query.message.reply_text("📧 আপনার টেস্ট ইমেইল এড্রেসটি লিখুন (যেমন: myemail@gmail.com):")
+
+async def handle_spam_check_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id): return
+    
+    # যদি স্পাম চেকের জন্য অপেক্ষা করা হয়
+    if context.user_data.get('awaiting_test_email'):
+        test_email = update.message.text.strip()
+        
+        try:
+            leads_ref = db.reference('scraped_emails')
+            all_leads = leads_ref.get()
+            
+            if not all_leads:
+                await update.message.reply_text("⚠️ ডাটাবেজে কোনো লিড নেই, তাই ইমেইল পরিবর্তন করা সম্ভব নয়।")
+                context.user_data['awaiting_test_email'] = False
+                return
+
+            # পরবর্তী পেন্ডিং লিড খুঁজে বের করা
+            target_key = next((k for k, v in all_leads.items() if v.get('status') is None and v.get('processing_by') is None), None)
+            
+            if target_key:
+                app_name = all_leads[target_key].get('app_name', 'Unknown App')
+                # ইমেইল আপডেট করা
+                leads_ref.child(target_key).update({'email': test_email})
+                
+                await update.message.reply_text(
+                    f"✅ **সফল!**\n\nপরবর্তী অ্যাপ: **{app_name}**\nনতুন ইমেইল সেট করা হয়েছে: `{test_email}`\n\nবট যখন মেইল পাঠাবে, তখন এটি এই ঠিকানায় যাবে। আপনি স্পাম বক্স চেক করতে পারবেন।"
+                )
+            else:
+                await update.message.reply_text("⚠️ কোনো পেন্ডিং লিড পাওয়া যায়নি। সম্ভবত সব মেইল পাঠানো শেষ।")
+                
+        except Exception as e:
+            logger.error(f"Spam check update error: {e}")
+            await update.message.reply_text("❌ ইমেইল আপডেট করতে সমস্যা হয়েছে।")
+        
+        # স্টেট ক্লিয়ার করা
+        context.user_data['awaiting_test_email'] = False
 
 async def set_email_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if not is_owner(u.effective_user.id): return
@@ -256,6 +315,9 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("set_email", set_email_cmd))
     app.add_handler(CallbackQueryHandler(button_tap))
+    
+    # সাধারণ টেক্সট হ্যান্ডলার (স্পাম চেক ইমেইল ধরার জন্য)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_spam_check_email))
 
     logger.info("🤖 Bot is running...")
     if RENDER_URL:
