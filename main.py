@@ -100,32 +100,42 @@ def get_next_api_key():
     return key
 
 async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
+    """
+    AI Logic Updated:
+    1. Body text remains exact (HTML preserved).
+    2. Only {app_name} is replaced.
+    3. Subject is slightly varied.
+    4. Unique signature added at the bottom.
+    """
     if not GROQ_KEYS:
         await notify_owner(context, "Groq API Key পাওয়া যাচ্ছে না! ENV ফাইল চেক করুন।")
-        return original_sub, original_body
+        # Fallback: Just replace placeholder manually
+        return original_sub, original_body.replace("{app_name}", app_name)
 
     for i in range(len(GROQ_KEYS)):
         api_key = get_next_api_key()
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-        # AI-কে দেওয়া শক্তিশালী নির্দেশাবলী (Advanced Prompt)
+        # --- Updated Strict Prompt ---
         prompt = (
-            f"You are a professional App Growth Consultant. Your goal is to rewrite a cold email for the app '{app_name}'.\n"
-            f"STRATEGY: Focus on 'Social Proof', 'User Credibility', and 'Trust Gap'. Avoid direct aggressive sales words like 'Buy Reviews'. Use 'Organic Engagement' or 'Authentic Feedback' instead.\n"
-            f"RULES:\n"
-            f"1. STRICT: You MUST keep the EXACT HTML layout, styles, <div>, and the Telegram button. Only rewrite the text content inside the tags.\n"
-            f"2. TONE: Persuasive but polite. Make the developer feel that they NEED more user engagement to succeed.\n"
-            f"3. SPAM PROTECTION: Do not use excessive capital letters or typical spammy marketing phrases. Keep it human-like.\n"
-            f"4. FORMAT: Subject: [Catchy Professional Subject] ||| Body: [Rewritten HTML Body]\n\n"
+            f"Task: Prepare email for sending.\n"
+            f"Target App Name: {app_name}\n"
             f"Original Subject: {original_sub}\n"
-            f"Original Body: {original_body}"
+            f"Original Body: {original_body}\n\n"
+            f"STRICT INSTRUCTIONS:\n"
+            f"1. SUBJECT: Rewrite the 'Original Subject' slightly to make it unique (to avoid spam folders), but keep the exact same meaning. Include '{app_name}' in subject if it fits naturally.\n"
+            f"2. BODY: Do NOT rewrite the body text. Keep all HTML tags, links, and formatting EXACTLY as they are.\n"
+            f"   - ACTION: Only find the placeholder '{{app_name}}' and replace it with the actual text: '{app_name}'.\n"
+            f"3. SIGNATURE: At the very bottom of the body, append a <br><br><small> tag containing a short, random professional quote or a unique reference ID (e.g., 'Ref: {random.randint(1000,9999)}') to make the email content unique.\n"
+            f"4. OUTPUT FORMAT: Return EXACTLY in this format:\n"
+            f"   Subject: [New Subject] ||| Body: [The Body with App Name replaced]\n"
         )
 
         payload = {
             "model": "llama-3.3-70b-versatile", 
             "messages": [{"role": "user", "content": prompt}], 
-            "temperature": 0.8
+            "temperature": 0.7
         }
 
         try:
@@ -135,7 +145,8 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
                 text = res_json['choices'][0]['message']['content'].strip()
                 if "|||" in text:
                     parts = text.split("|||")
-                    return parts[0].replace("Subject:", "").strip(), parts[1].replace("Body:", "").strip().replace('\n', '<br>')
+                    # Return Subject and Body
+                    return parts[0].replace("Subject:", "").strip(), parts[1].replace("Body:", "").strip()
             elif response.status_code == 429:
                 await notify_owner(context, f"Groq Key #{i+1} লিমিট শেষ (Rate Limit)। পরের কি ট্রাই করছি...")
             else:
@@ -144,7 +155,8 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
             logger.error(f"AI Error: {e}")
         await asyncio.sleep(1)
 
-    return original_sub, original_body
+    # If all keys fail, return original with manual replacement
+    return original_sub, original_body.replace("{app_name}", app_name)
 
 # --- Helper Functions ---
 def get_gas_url(context):
@@ -189,28 +201,46 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id, "✅ ইমেইল সেন্ডিং প্রসেস সফলভাবে শুরু হয়েছে।")
 
     while IS_SENDING:
+        # Fetch fresh data each loop
         all_leads = leads_ref.get()
         if not all_leads:
             await notify_owner(context, "ডেটাবেজে কোনো ইমেইল লিস্ট (scraped_emails) নেই!")
             break
         
+        # Find next pending lead
         target_key = next((k for k, v in all_leads.items() if v.get('status') is None and v.get('processing_by') is None), None)
         if not target_key:
             await context.bot.send_message(chat_id, "🏁 সব ইমেইল পাঠানো শেষ হয়েছে।")
             break
 
+        # Mark as processing
         leads_ref.child(target_key).update({'processing_by': BOT_ID_PREFIX})
         target_data = all_leads[target_key]
         
-        final_sub, ai_body = await rewrite_email_with_ai(config.get('subject'), config.get('body'), target_data.get('app_name'), context)
-        unique_id = ''.join(random.choices(string.ascii_letters, k=8))
-        final_body = f"{ai_body}<br><br><small style='color:grey;'>Ref: {unique_id}</small>"
-
-        res = await call_gas_api({"action": "sendEmail", "to": target_data.get('email'), "subject": final_sub, "body": final_body}, context)
+        # Get AI Rewritten Content
+        final_sub, final_body = await rewrite_email_with_ai(
+            config.get('subject'), 
+            config.get('body'), 
+            target_data.get('app_name'), 
+            context
+        )
+        
+        # Send via GAS
+        res = await call_gas_api({
+            "action": "sendEmail", 
+            "to": target_data.get('email'), 
+            "subject": final_sub, 
+            "body": final_body
+        }, context)
         
         if res.get("status") == "success":
-            leads_ref.child(target_key).update({'status': 'sent', 'sent_at': datetime.now().isoformat(), 'sent_by': BOT_ID_PREFIX, 'processing_by': None})
-            # টাইমার (৫-৬ মিনিট)
+            leads_ref.child(target_key).update({
+                'status': 'sent', 
+                'sent_at': datetime.now().isoformat(), 
+                'sent_by': BOT_ID_PREFIX, 
+                'processing_by': None
+            })
+            # Timer (Random 5-6 minutes)
             await asyncio.sleep(random.randint(300, 360))
         else:
             leads_ref.child(target_key).update({'processing_by': None})
@@ -261,7 +291,6 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("📧 আপনার টেস্ট ইমেইল এড্রেসটি লিখুন (যেমন: myemail@gmail.com):")
 
     elif query.data == 'btn_delete_sent':
-        # সেন্ড মেইল ডিলিট করার লজিক
         await query.message.reply_text("🗑️ সেন্ড হওয়া মেইল খোঁজা হচ্ছে এবং ডিলিট করা হচ্ছে...")
         try:
             leads_ref = db.reference('scraped_emails')
@@ -271,14 +300,12 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text("⚠️ ডাটাবেজে কোনো মেইল নেই।")
                 return
 
-            # শুধুমাত্র 'sent' স্ট্যাটাসের মেইলের key গুলো বের করা
             keys_to_delete = [k for k, v in all_leads.items() if v.get('status') == 'sent']
             
             if not keys_to_delete:
                 await query.message.reply_text("⚠️ ডিলিট করার মতো কোনো 'Sent' মেইল পাওয়া যায়নি।")
                 return
 
-            # ডিলিট প্রসেস (বাল্ক আপডেট দিয়ে ডিলিট করা - Efficient way)
             updates = {key: None for key in keys_to_delete}
             leads_ref.update(updates)
             
@@ -291,7 +318,6 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_spam_check_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
     
-    # যদি স্পাম চেকের জন্য অপেক্ষা করা হয়
     if context.user_data.get('awaiting_test_email'):
         test_email = update.message.text.strip()
         
@@ -304,12 +330,10 @@ async def handle_spam_check_email(update: Update, context: ContextTypes.DEFAULT_
                 context.user_data['awaiting_test_email'] = False
                 return
 
-            # পরবর্তী পেন্ডিং লিড খুঁজে বের করা
             target_key = next((k for k, v in all_leads.items() if v.get('status') is None and v.get('processing_by') is None), None)
             
             if target_key:
                 app_name = all_leads[target_key].get('app_name', 'Unknown App')
-                # ইমেইল আপডেট করা
                 leads_ref.child(target_key).update({'email': test_email})
                 
                 await update.message.reply_text(
@@ -322,30 +346,30 @@ async def handle_spam_check_email(update: Update, context: ContextTypes.DEFAULT_
             logger.error(f"Spam check update error: {e}")
             await update.message.reply_text("❌ ইমেইল আপডেট করতে সমস্যা হয়েছে।")
         
-        # স্টেট ক্লিয়ার করা
         context.user_data['awaiting_test_email'] = False
 
 async def set_email_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if not is_owner(u.effective_user.id): return
     try:
         content = u.message.text.split('/set_email ', 1)[1]
-        sub, body = content.split('|', 1)
-        db.reference('shared_config/email_template').set({'subject': sub.strip(), 'body': body.strip()})
-        await u.message.reply_text("✅ টেম্পলেট সেভ হয়েছে।")
+        if '|' in content:
+            sub, body = content.split('|', 1)
+            db.reference('shared_config/email_template').set({'subject': sub.strip(), 'body': body.strip()})
+            await u.message.reply_text("✅ টেম্পলেট সেভ হয়েছে।")
+        else:
+            await u.message.reply_text("⚠️ ফরম্যাট ভুল। '|' (pipe) চিহ্ন পাওয়া যায়নি।")
     except:
         await u.message.reply_text("❌ ভুল ফরম্যাট! উদাহরণ: `/set_email সাবজেক্ট | বডি`")
 
 def main():
     app = Application.builder().token(TOKEN).build()
     
-    # সজাগ রাখার টাস্ক
     app.job_queue.run_once(keep_alive_task, 5)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("set_email", set_email_cmd))
     app.add_handler(CallbackQueryHandler(button_tap))
     
-    # সাধারণ টেক্সট হ্যান্ডলার (স্পাম চেক ইমেইল ধরার জন্য)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_spam_check_email))
 
     logger.info("🤖 Bot is running...")
