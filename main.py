@@ -109,7 +109,7 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-        # AI-কে দেওয়া শক্তিশালী নির্দেশাবলী (Advanced Prompt) - UPDATED
+        # AI-কে দেওয়া শক্তিশালী নির্দেশাবলী (Advanced Prompt)
         prompt = (
             f"You are a professional App Growth Consultant. Your goal is to rewrite a cold email for the app '{app_name}'.\n"
             f"STRATEGY: Focus on 'Social Proof', 'User Credibility', and 'Trust Gap'. Avoid direct aggressive sales words like 'Buy Reviews'. Use 'Organic Engagement' or 'Authentic Feedback' instead.\n"
@@ -210,7 +210,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
         
         if res.get("status") == "success":
             leads_ref.child(target_key).update({'status': 'sent', 'sent_at': datetime.now().isoformat(), 'sent_by': BOT_ID_PREFIX, 'processing_by': None})
-            # টাইমার বাড়ানো হয়েছে স্পাম রোধে (৫-৬ মিনিট)
+            # টাইমার (৫-৬ মিনিট)
             await asyncio.sleep(random.randint(300, 360))
         else:
             leads_ref.child(target_key).update({'processing_by': None})
@@ -226,7 +226,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],
         [InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],
         [InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],
-        [InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')]
+        [InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],
+        [InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')]
     ]))
 
 async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -258,6 +259,34 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'btn_spam_check':
         context.user_data['awaiting_test_email'] = True
         await query.message.reply_text("📧 আপনার টেস্ট ইমেইল এড্রেসটি লিখুন (যেমন: myemail@gmail.com):")
+
+    elif query.data == 'btn_delete_sent':
+        # সেন্ড মেইল ডিলিট করার লজিক
+        await query.message.reply_text("🗑️ সেন্ড হওয়া মেইল খোঁজা হচ্ছে এবং ডিলিট করা হচ্ছে...")
+        try:
+            leads_ref = db.reference('scraped_emails')
+            all_leads = leads_ref.get()
+            
+            if not all_leads:
+                await query.message.reply_text("⚠️ ডাটাবেজে কোনো মেইল নেই।")
+                return
+
+            # শুধুমাত্র 'sent' স্ট্যাটাসের মেইলের key গুলো বের করা
+            keys_to_delete = [k for k, v in all_leads.items() if v.get('status') == 'sent']
+            
+            if not keys_to_delete:
+                await query.message.reply_text("⚠️ ডিলিট করার মতো কোনো 'Sent' মেইল পাওয়া যায়নি।")
+                return
+
+            # ডিলিট প্রসেস (বাল্ক আপডেট দিয়ে ডিলিট করা - Efficient way)
+            updates = {key: None for key in keys_to_delete}
+            leads_ref.update(updates)
+            
+            await query.message.reply_text(f"✅ সফলভাবে **{len(keys_to_delete)}** টি সেন্ড মেইল ডিলিট করা হয়েছে।")
+            
+        except Exception as e:
+            logger.error(f"Delete Sent Emails Error: {e}")
+            await query.message.reply_text(f"❌ ডিলিট করতে সমস্যা হয়েছে: {str(e)}")
 
 async def handle_spam_check_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
