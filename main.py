@@ -85,7 +85,7 @@ async def keep_alive_task(context: ContextTypes.DEFAULT_TYPE):
     
     while True:
         try:
-            requests.get(RENDER_URL, timeout=10)
+            requests.get(RENDER_URL, timeout=20)
             logger.info("📡 Keep-alive sent.")
         except Exception as e:
             logger.error(f"Keep-alive error: {e}")
