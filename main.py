@@ -207,8 +207,8 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
             await notify_owner(context, "ডেটাবেজে কোনো ইমেইল লিস্ট (scraped_emails) নেই!")
             break
         
-        # Find next pending lead
-        target_key = next((k for k, v in all_leads.items() if v.get('status') is None and v.get('processing_by') is None), None)
+        # Find next pending lead (processing_by is None)
+        target_key = next((k for k, v in all_leads.items() if v.get('processing_by') is None), None)
         if not target_key:
             await context.bot.send_message(chat_id, "🏁 সব ইমেইল পাঠানো শেষ হয়েছে।")
             break
@@ -234,12 +234,12 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
         }, context)
         
         if res.get("status") == "success":
-            leads_ref.child(target_key).update({
-                'status': 'sent', 
-                'sent_at': datetime.now().isoformat(), 
-                'sent_by': BOT_ID_PREFIX, 
-                'processing_by': None
-            })
+            # ---------- NEW: Delete the lead and increment counter ----------
+            leads_ref.child(target_key).delete()  # lead removed from DB
+            # Increment sent count (atomically)
+            counter_ref = db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count')
+            counter_ref.transaction(lambda current: (current or 0) + 1)
+            # -----------------------------------------------------------------
             # Timer (Random 5-6 minutes)
             await asyncio.sleep(random.randint(300, 360))
         else:
@@ -252,12 +252,14 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
+    # ---------- NEW: Added Reset Count button ----------
     await update.message.reply_text(f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", reply_markup=InlineKeyboardMarkup([
         [InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],
         [InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],
         [InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],
         [InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],
-        [InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')]
+        [InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],
+        [InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]  # New button
     ]))
 
 async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -281,10 +283,13 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'btn_stats':
         try:
             leads = db.reference('scraped_emails').get() or {}
-            sent = sum(1 for v in leads.values() if v.get('status') == 'sent')
+            # ---------- NEW: Get sent count from counter ----------
+            counter_ref = db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count')
+            sent = counter_ref.get() or 0
+            # -------------------------------------------------------
             await query.message.reply_text(f"📊 স্ট্যাটাস: মোট ইমেইল {len(leads)}, পাঠানো হয়েছে {sent}")
         except:
-            await notify_owner(context, "স্ট্যাটাস দেখাতে সমস্যা হচ্ছে। ফায়ারবেস কানেকশন চেক করুন।")
+            await notify_owner(context, "স্ট্যাটাস দেখাতে সমস্যা হচ্ছে। ফায়ারবেস কানেকশন চেক করুন.")
             
     elif query.data == 'btn_spam_check':
         context.user_data['awaiting_test_email'] = True
@@ -314,6 +319,16 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Delete Sent Emails Error: {e}")
             await query.message.reply_text(f"❌ ডিলিট করতে সমস্যা হয়েছে: {str(e)}")
+
+    # ---------- NEW: Reset Count button handler ----------
+    elif query.data == 'btn_reset_count':
+        try:
+            counter_ref = db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count')
+            counter_ref.set(0)
+            await query.message.reply_text("✅ Sent count has been reset to 0.")
+        except Exception as e:
+            logger.error(f"Reset count error: {e}")
+            await query.message.reply_text("❌ Count reset করতে সমস্যা হয়েছে।")
 
 async def handle_spam_check_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
