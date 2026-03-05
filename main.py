@@ -40,7 +40,7 @@ GAS_URL_ENV = os.environ.get('GAS_URL')
 
 # Groq API Keys
 GROQ_KEYS_STR = os.environ.get('GROQ_API_KEYS', '') 
-GROQ_KEYS = [k.strip() for k in GROQ_KEYS_STR.split(',') if k.strip()]
+GROQ_KEYS =[k.strip() for k in GROQ_KEYS_STR.split(',') if k.strip()]
 
 # --- Global Control ---
 IS_SENDING = False
@@ -99,18 +99,28 @@ def get_next_api_key():
     CURRENT_KEY_INDEX += 1
     return key
 
-async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
+async def rewrite_email_with_ai(original_sub, original_body, target_data, context):
     """
-    AI Logic Updated:
-    1. Body text remains exact (HTML preserved).
-    2. Only {app_name} is replaced.
-    3. Subject is slightly varied.
-    4. Unique signature added at the bottom.
+    AI Logic Updated for Play Store Interface:
+    Replaces {app_name}, {score}, {total_ratings}, and {installs}.
     """
+    # Extract data securely with fallbacks
+    app_name = target_data.get('app_name', 'Your App')
+    score = str(target_data.get('score', '0.0'))
+    total_ratings = str(target_data.get('total_ratings', '0'))
+    installs = str(target_data.get('installs', '0'))
+
+    # Fallback Replace logic (If AI fails or no keys)
+    def manual_replace(sub, body):
+        replaced_body = body.replace("{app_name}", app_name) \
+                            .replace("{score}", score) \
+                            .replace("{total_ratings}", total_ratings) \
+                            .replace("{installs}", installs)
+        return sub, replaced_body
+
     if not GROQ_KEYS:
         await notify_owner(context, "Groq API Key পাওয়া যাচ্ছে না! ENV ফাইল চেক করুন।")
-        # Fallback: Just replace placeholder manually
-        return original_sub, original_body.replace("{app_name}", app_name)
+        return manual_replace(original_sub, original_body)
 
     for i in range(len(GROQ_KEYS)):
         api_key = get_next_api_key()
@@ -120,16 +130,20 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
         # --- Updated Strict Prompt ---
         prompt = (
             f"Task: Prepare email for sending.\n"
-            f"Target App Name: {app_name}\n"
+            f"Target App Data:\n"
+            f"- App Name: {app_name}\n"
+            f"- Score: {score}\n"
+            f"- Total Ratings: {total_ratings}\n"
+            f"- Installs: {installs}\n\n"
             f"Original Subject: {original_sub}\n"
             f"Original Body: {original_body}\n\n"
             f"STRICT INSTRUCTIONS:\n"
             f"1. SUBJECT: Rewrite the 'Original Subject' slightly to make it unique (to avoid spam folders), but keep the exact same meaning. Include '{app_name}' in subject if it fits naturally.\n"
             f"2. BODY: Do NOT rewrite the body text. Keep all HTML tags, links, and formatting EXACTLY as they are.\n"
-            f"   - ACTION: Only find the placeholder '{{app_name}}' and replace it with the actual text: '{app_name}'.\n"
+            f"   - ACTION: Find the placeholders {{app_name}}, {{score}}, {{total_ratings}}, and {{installs}} in the HTML and replace them with the actual Target App Data provided above.\n"
             f"3. SIGNATURE: At the very bottom of the body, append a <br><br><small> tag containing a short, random professional quote or a unique reference ID (e.g., 'Ref: {random.randint(1000,9999)}') to make the email content unique.\n"
             f"4. OUTPUT FORMAT: Return EXACTLY in this format:\n"
-            f"   Subject: [New Subject] ||| Body: [The Body with App Name replaced]\n"
+            f"   Subject: [New Subject] ||| Body: [The Body with data replaced]\n"
         )
 
         payload = {
@@ -145,7 +159,6 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
                 text = res_json['choices'][0]['message']['content'].strip()
                 if "|||" in text:
                     parts = text.split("|||")
-                    # Return Subject and Body
                     return parts[0].replace("Subject:", "").strip(), parts[1].replace("Body:", "").strip()
             elif response.status_code == 429:
                 await notify_owner(context, f"Groq Key #{i+1} লিমিট শেষ (Rate Limit)। পরের কি ট্রাই করছি...")
@@ -155,8 +168,8 @@ async def rewrite_email_with_ai(original_sub, original_body, app_name, context):
             logger.error(f"AI Error: {e}")
         await asyncio.sleep(1)
 
-    # If all keys fail, return original with manual replacement
-    return original_sub, original_body.replace("{app_name}", app_name)
+    # If all Groq keys fail, do manual replacement
+    return manual_replace(original_sub, original_body)
 
 # --- Helper Functions ---
 def get_gas_url(context):
@@ -217,11 +230,11 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
         leads_ref.child(target_key).update({'processing_by': BOT_ID_PREFIX})
         target_data = all_leads[target_key]
         
-        # Get AI Rewritten Content
+        # Get AI Rewritten Content (Passing full target_data now)
         final_sub, final_body = await rewrite_email_with_ai(
             config.get('subject'), 
             config.get('body'), 
-            target_data.get('app_name'), 
+            target_data, 
             context
         )
         
@@ -234,12 +247,12 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
         }, context)
         
         if res.get("status") == "success":
-            # ---------- NEW: Delete the lead and increment counter ----------
             leads_ref.child(target_key).delete()  # lead removed from DB
+            
             # Increment sent count (atomically)
             counter_ref = db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count')
             counter_ref.transaction(lambda current: (current or 0) + 1)
-            # -----------------------------------------------------------------
+            
             # Timer (Random 5-6 minutes)
             await asyncio.sleep(random.randint(300, 360))
         else:
@@ -252,14 +265,9 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
-    # ---------- NEW: Added Reset Count button ----------
-    await update.message.reply_text(f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],
-        [InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],
-        [InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],
-        [InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],
-        [InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],
-        [InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]  # New button
+    await update.message.reply_text(f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],[InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],[InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],
+        [InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],[InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],
+        [InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]
     ]))
 
 async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -283,10 +291,8 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'btn_stats':
         try:
             leads = db.reference('scraped_emails').get() or {}
-            # ---------- NEW: Get sent count from counter ----------
             counter_ref = db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count')
             sent = counter_ref.get() or 0
-            # -------------------------------------------------------
             await query.message.reply_text(f"📊 স্ট্যাটাস: মোট ইমেইল {len(leads)}, পাঠানো হয়েছে {sent}")
         except:
             await notify_owner(context, "স্ট্যাটাস দেখাতে সমস্যা হচ্ছে। ফায়ারবেস কানেকশন চেক করুন.")
@@ -305,7 +311,7 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text("⚠️ ডাটাবেজে কোনো মেইল নেই।")
                 return
 
-            keys_to_delete = [k for k, v in all_leads.items() if v.get('status') == 'sent']
+            keys_to_delete =[k for k, v in all_leads.items() if v.get('status') == 'sent']
             
             if not keys_to_delete:
                 await query.message.reply_text("⚠️ ডিলিট করার মতো কোনো 'Sent' মেইল পাওয়া যায়নি।")
@@ -320,7 +326,6 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Delete Sent Emails Error: {e}")
             await query.message.reply_text(f"❌ ডিলিট করতে সমস্যা হয়েছে: {str(e)}")
 
-    # ---------- NEW: Reset Count button handler ----------
     elif query.data == 'btn_reset_count':
         try:
             counter_ref = db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count')
