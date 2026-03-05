@@ -101,37 +101,26 @@ def get_next_api_key():
 
 async def rewrite_email_with_ai(original_sub, original_body, target_data, context):
     """
-    AI Logic Updated for Play Store Interface:
-    Replaces {app_name}, {score}, {total_ratings}, and {installs}.
-    """
-    # Extract data securely with fallbacks
-    app_name = target_data.get('app_name', 'Your App')
-    score = str(target_data.get('score', '0.0'))
-    total_ratings = str(target_data.get('total_ratings', '0'))
-    installs = str(target_data.get('installs', '0'))
-
-    # Fallback Replace logic (If AI fails or no keys)
-    def manual_replace(sub, body):
-        replaced_body = body.replace("{app_name}", app_name) \
-                            .replace("{score}", score) \
-                            .replace("{total_ratings}", total_ratings) \
-                            .replace("{installs}", installs)
-        return sub, replaced_body
-
-    if not GROQ_KEYS:
-        await notify_owner(context, "Groq API Key পাওয়া যাচ্ছে না! ENV ফাইল চেক করুন।")
-        return manual_replace(original_sub, original_body)
-
-    for i in range(len(GROQ_KEYS)):
-        api_key = get_next_api_key()
-async def rewrite_email_with_ai(original_sub, original_body, target_data, context):
-    """
-    AI Logic Updated to calculate actual percentage widths for 1 to 5 stars histogram.
+    AI Logic Updated for Exact Play Store Interface:
+    1. Formats score to exactly 1 decimal place (e.g. 3.7878 -> 3.8).
+    2. Calculates actual percentage widths for 1 to 5 stars histogram.
     """
     # Extract basic app data
     app_name = target_data.get('app_name', 'Your App')
-    score = str(target_data.get('score', '0.0'))
+    
+    # 🌟 NEW: Format Score to exactly 1 decimal place
+    try:
+        raw_score = float(target_data.get('score', 0.0))
+        score = f"{raw_score:.1f}"  # Converts 3.7878788 to '3.8' (or '3.7' if it was 3.74)
+    except Exception:
+        score = "0.0"
+
     total_ratings_raw = target_data.get('total_ratings', 0)
+    try:
+        total_ratings_raw = int(total_ratings_raw)
+    except:
+        total_ratings_raw = 0
+        
     total_ratings = str(total_ratings_raw)
     installs = str(target_data.get('installs', '0'))
     
@@ -142,14 +131,17 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
     r2 = int(target_data.get('ratings_2', 0))
     r1 = int(target_data.get('ratings_1', 0))
     
-    # Calculate percentages for the HTML width
-    pct_5 = str(int((r5 / total_ratings_raw) * 100)) if total_ratings_raw > 0 else "0"
-    pct_4 = str(int((r4 / total_ratings_raw) * 100)) if total_ratings_raw > 0 else "0"
-    pct_3 = str(int((r3 / total_ratings_raw) * 100)) if total_ratings_raw > 0 else "0"
-    pct_2 = str(int((r2 / total_ratings_raw) * 100)) if total_ratings_raw > 0 else "0"
-    pct_1 = str(int((r1 / total_ratings_raw) * 100)) if total_ratings_raw > 0 else "0"
+    # Calculate percentages for the HTML progress bar width
+    if total_ratings_raw > 0:
+        pct_5 = str(int((r5 / total_ratings_raw) * 100))
+        pct_4 = str(int((r4 / total_ratings_raw) * 100))
+        pct_3 = str(int((r3 / total_ratings_raw) * 100))
+        pct_2 = str(int((r2 / total_ratings_raw) * 100))
+        pct_1 = str(int((r1 / total_ratings_raw) * 100))
+    else:
+        pct_5 = pct_4 = pct_3 = pct_2 = pct_1 = "0"
 
-    # Fallback / Manual Replace logic
+    # Fallback / Manual Replace logic if AI fails
     def manual_replace(sub, body):
         replaced_body = body.replace("{app_name}", app_name) \
                             .replace("{score}", score) \
@@ -193,7 +185,7 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
 
         payload = {
             "model": "llama-3.3-70b-versatile", 
-            "messages": [{"role": "user", "content": prompt}], 
+            "messages":[{"role": "user", "content": prompt}], 
             "temperature": 0.7
         }
 
@@ -275,7 +267,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
         leads_ref.child(target_key).update({'processing_by': BOT_ID_PREFIX})
         target_data = all_leads[target_key]
         
-        # Get AI Rewritten Content (Passing full target_data now)
+        # Get AI Rewritten Content (Passing full target_data)
         final_sub, final_body = await rewrite_email_with_ai(
             config.get('subject'), 
             config.get('body'), 
@@ -310,9 +302,9 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
-    await update.message.reply_text(f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],[InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],[InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],
-        [InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],[InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],
-        [InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]
+    await update.message.reply_text(f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],
+        [InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],
+        [InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],[InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],[InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],[InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]
     ]))
 
 async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
