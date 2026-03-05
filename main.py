@@ -124,26 +124,71 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
 
     for i in range(len(GROQ_KEYS)):
         api_key = get_next_api_key()
+async def rewrite_email_with_ai(original_sub, original_body, target_data, context):
+    """
+    AI Logic Updated to calculate actual percentage widths for 1 to 5 stars histogram.
+    """
+    # Extract basic app data
+    app_name = target_data.get('app_name', 'Your App')
+    score = str(target_data.get('score', '0.0'))
+    total_ratings_raw = target_data.get('total_ratings', 0)
+    total_ratings = str(total_ratings_raw)
+    installs = str(target_data.get('installs', '0'))
+    
+    # Extract individual ratings
+    r5 = int(target_data.get('ratings_5', 0))
+    r4 = int(target_data.get('ratings_4', 0))
+    r3 = int(target_data.get('ratings_3', 0))
+    r2 = int(target_data.get('ratings_2', 0))
+    r1 = int(target_data.get('ratings_1', 0))
+    
+    # Calculate percentages for the HTML width
+    pct_5 = str(int((r5 / total_ratings_raw) * 100)) if total_ratings_raw > 0 else "0"
+    pct_4 = str(int((r4 / total_ratings_raw) * 100)) if total_ratings_raw > 0 else "0"
+    pct_3 = str(int((r3 / total_ratings_raw) * 100)) if total_ratings_raw > 0 else "0"
+    pct_2 = str(int((r2 / total_ratings_raw) * 100)) if total_ratings_raw > 0 else "0"
+    pct_1 = str(int((r1 / total_ratings_raw) * 100)) if total_ratings_raw > 0 else "0"
+
+    # Fallback / Manual Replace logic
+    def manual_replace(sub, body):
+        replaced_body = body.replace("{app_name}", app_name) \
+                            .replace("{score}", score) \
+                            .replace("{total_ratings}", total_ratings) \
+                            .replace("{installs}", installs) \
+                            .replace("{pct_5}", pct_5) \
+                            .replace("{pct_4}", pct_4) \
+                            .replace("{pct_3}", pct_3) \
+                            .replace("{pct_2}", pct_2) \
+                            .replace("{pct_1}", pct_1)
+        return sub, replaced_body
+
+    if not GROQ_KEYS:
+        await notify_owner(context, "Groq API Key পাওয়া যাচ্ছে না! ENV ফাইল চেক করুন।")
+        return manual_replace(original_sub, original_body)
+
+    for i in range(len(GROQ_KEYS)):
+        api_key = get_next_api_key()
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-        # --- Updated Strict Prompt ---
+        # --- Updated Prompt for Groq AI ---
         prompt = (
             f"Task: Prepare email for sending.\n"
             f"Target App Data:\n"
             f"- App Name: {app_name}\n"
             f"- Score: {score}\n"
             f"- Total Ratings: {total_ratings}\n"
-            f"- Installs: {installs}\n\n"
+            f"- Installs: {installs}\n"
+            f"- Percentages: pct_5={pct_5}, pct_4={pct_4}, pct_3={pct_3}, pct_2={pct_2}, pct_1={pct_1}\n\n"
             f"Original Subject: {original_sub}\n"
             f"Original Body: {original_body}\n\n"
             f"STRICT INSTRUCTIONS:\n"
             f"1. SUBJECT: Rewrite the 'Original Subject' slightly to make it unique (to avoid spam folders), but keep the exact same meaning. Include '{app_name}' in subject if it fits naturally.\n"
             f"2. BODY: Do NOT rewrite the body text. Keep all HTML tags, links, and formatting EXACTLY as they are.\n"
-            f"   - ACTION: Find the placeholders {{app_name}}, {{score}}, {{total_ratings}}, and {{installs}} in the HTML and replace them with the actual Target App Data provided above.\n"
-            f"3. SIGNATURE: At the very bottom of the body, append a <br><br><small> tag containing a short, random professional quote or a unique reference ID (e.g., 'Ref: {random.randint(1000,9999)}') to make the email content unique.\n"
+            f"   - ACTION: Find ALL placeholders ({{app_name}}, {{score}}, {{total_ratings}}, {{installs}}, {{pct_5}}, {{pct_4}}, {{pct_3}}, {{pct_2}}, {{pct_1}}) in the HTML and replace them EXACTLY with the Target App Data provided above.\n"
+            f"3. SIGNATURE: At the very bottom of the body, append a <br><br><small> tag containing a short, random reference ID (e.g., 'Ref: {random.randint(1000,9999)}') to make the email content unique.\n"
             f"4. OUTPUT FORMAT: Return EXACTLY in this format:\n"
-            f"   Subject: [New Subject] ||| Body: [The Body with data replaced]\n"
+            f"   Subject: [New Subject] ||| Body:[The Body with data replaced]\n"
         )
 
         payload = {
