@@ -22,6 +22,9 @@ from telegram.ext import (
 import firebase_admin
 from firebase_admin import credentials, db
 
+# 🌟 NEW: Import Google Play Scraper to fetch live icons using app_id
+from google_play_scraper import app as play_app
+
 # --- Load Environment Variables ---
 load_dotenv()
 
@@ -101,16 +104,25 @@ def get_next_api_key():
 
 async def rewrite_email_with_ai(original_sub, original_body, target_data, context):
     """
-    AI Logic Updated to PREVENT HTML CUT-OFF & FIX BROKEN IMAGES
+    AI Logic Updated to PREVENT HTML CUT-OFF & FETCH LIVE APP ICON USING APP_ID
     """
     # Extract basic app data
     app_name = target_data.get('app_name', 'Your App')
-    
-    # 🌟 STRICT ICON CHECK: If icon is missing/empty (old leads), use default icon
-    app_icon = target_data.get('icon')
+    app_id = target_data.get('app_id', '')
+    app_icon = target_data.get('icon', '')
+
+    # 🌟 LIVE ICON FETCH LOGIC: If icon is missing, fetch it live from Play Store using app_id
     if not app_icon or app_icon == 'N/A' or str(app_icon).strip() == '':
-        # Default professional app icon
-        app_icon = 'https://cdn-icons-png.flaticon.com/128/2267/2267777.png'
+        if app_id and app_id != 'N/A':
+            try:
+                # Fetch app details live from Play Store
+                app_info = await asyncio.to_thread(play_app, app_id, lang='en', country='us')
+                app_icon = app_info.get('icon', 'https://cdn-icons-png.flaticon.com/128/2267/2267777.png')
+            except Exception as e:
+                logger.error(f"Icon fetch error for {app_id}: {e}")
+                app_icon = 'https://cdn-icons-png.flaticon.com/128/2267/2267777.png'
+        else:
+            app_icon = 'https://cdn-icons-png.flaticon.com/128/2267/2267777.png'
     
     # Format Score to exactly 1 decimal place (e.g. 3.7878 -> 3.8)
     try:
@@ -292,8 +304,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
-    await update.message.reply_text(f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],[InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],[InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],[InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],[InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],[InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]
+    await update.message.reply_text(f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],[InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],[InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],[InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],[InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],[InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]
     ]))
 
 async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
