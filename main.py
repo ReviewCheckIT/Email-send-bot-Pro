@@ -101,12 +101,15 @@ def get_next_api_key():
 
 async def rewrite_email_with_ai(original_sub, original_body, target_data, context):
     """
-    AI Logic Updated to PREVENT HTML CUT-OFF:
+    AI Logic Updated to PREVENT HTML CUT-OFF & ADD APP ICON:
     1. Python handles the entire HTML replacement (100% safe, fast, and no truncation).
     2. AI is ONLY used to rewrite the subject line to avoid spam.
     """
     # Extract basic app data
     app_name = target_data.get('app_name', 'Your App')
+    
+    # 🌟 NEW: Extract App Icon (with fallback image if not found)
+    app_icon = target_data.get('icon', 'https://cdn-icons-png.flaticon.com/128/2267/2267777.png')
     
     # Format Score to exactly 1 decimal place (e.g. 3.7878 -> 3.8)
     try:
@@ -143,6 +146,7 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
 
     # 🌟 ALWAYS DO HTML REPLACEMENT IN PYTHON (This prevents the code cut-off issue)
     final_body = original_body.replace("{app_name}", app_name) \
+                              .replace("{app_icon}", app_icon) \
                               .replace("{score}", score) \
                               .replace("{total_ratings}", total_ratings) \
                               .replace("{installs}", installs) \
@@ -288,8 +292,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
     await update.message.reply_text(f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],
-        [InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],[InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],[InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],[InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],[InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]
+        [InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],[InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],[InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],[InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],[InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],[InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]
     ]))
 
 async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
