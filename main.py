@@ -169,44 +169,99 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
             f"Target App Data:\n"
             f"- App Name: {app_name}\n"
             f"- Score: {score}\n"
-            f"- Total Ratings: {total_ratings}\n"
-            f"- Installs: {installs}\n"
-            f"- Percentages: pct_5={pct_5}, pct_4={pct_4}, pct_3={pct_3}, pct_2={pct_2}, pct_1={pct_1}\n\n"
-            f"Original Subject: {original_sub}\n"
-            f"Original Body: {original_body}\n\n"
-            f"STRICT INSTRUCTIONS:\n"
-            f"1. SUBJECT: Rewrite the 'Original Subject' slightly to make it unique (to avoid spam folders), but keep the exact same meaning. Include '{app_name}' in subject if it fits naturally.\n"
-            f"2. BODY: Do NOT rewrite the body text. Keep all HTML tags, links, and formatting EXACTLY as they are.\n"
-            f"   - ACTION: Find ALL placeholders ({{app_name}}, {{score}}, {{total_ratings}}, {{installs}}, {{pct_5}}, {{pct_4}}, {{pct_3}}, {{pct_2}}, {{pct_1}}) in the HTML and replace them EXACTLY with the Target App Data provided above.\n"
-            f"3. SIGNATURE: At the very bottom of the body, append a <br><br><small> tag containing a short, random reference ID (e.g., 'Ref: {random.randint(1000,9999)}') to make the email content unique.\n"
-            f"4. OUTPUT FORMAT: Return EXACTLY in this format:\n"
-            f"   Subject: [New Subject] ||| Body:[The Body with data replaced]\n"
+async def rewrite_email_with_ai(original_sub, original_body, target_data, context):
+    """
+    AI Logic Updated to PREVENT HTML CUT-OFF:
+    1. Python handles the entire HTML replacement (100% safe, fast, and no truncation).
+    2. AI is ONLY used to rewrite the subject line to avoid spam.
+    """
+    # Extract basic app data
+    app_name = target_data.get('app_name', 'Your App')
+    
+    # Format Score to exactly 1 decimal place
+    try:
+        raw_score = float(target_data.get('score', 0.0))
+        score = f"{raw_score:.1f}"
+    except Exception:
+        score = "0.0"
+
+    total_ratings_raw = target_data.get('total_ratings', 0)
+    try:
+        total_ratings_raw = int(total_ratings_raw)
+    except:
+        total_ratings_raw = 0
+        
+    total_ratings = str(total_ratings_raw)
+    installs = str(target_data.get('installs', '0'))
+    
+    # Extract individual ratings
+    r5 = int(target_data.get('ratings_5', 0))
+    r4 = int(target_data.get('ratings_4', 0))
+    r3 = int(target_data.get('ratings_3', 0))
+    r2 = int(target_data.get('ratings_2', 0))
+    r1 = int(target_data.get('ratings_1', 0))
+    
+    # Calculate percentages for the HTML progress bar width
+    if total_ratings_raw > 0:
+        pct_5 = str(int((r5 / total_ratings_raw) * 100))
+        pct_4 = str(int((r4 / total_ratings_raw) * 100))
+        pct_3 = str(int((r3 / total_ratings_raw) * 100))
+        pct_2 = str(int((r2 / total_ratings_raw) * 100))
+        pct_1 = str(int((r1 / total_ratings_raw) * 100))
+    else:
+        pct_5 = pct_4 = pct_3 = pct_2 = pct_1 = "0"
+
+    # 🌟 ALWAYS DO HTML REPLACEMENT IN PYTHON (This prevents the code cut-off issue)
+    final_body = original_body.replace("{app_name}", app_name) \
+                              .replace("{score}", score) \
+                              .replace("{total_ratings}", total_ratings) \
+                              .replace("{installs}", installs) \
+                              .replace("{pct_5}", pct_5) \
+                              .replace("{pct_4}", pct_4) \
+                              .replace("{pct_3}", pct_3) \
+                              .replace("{pct_2}", pct_2) \
+                              .replace("{pct_1}", pct_1)
+
+    # Append unique signature to avoid spam
+    unique_id = random.randint(1000, 9999)
+    final_body += f"<br><br><small style='color:#f4f6f8;'>Ref: {unique_id}</small>"
+
+    # If no AI keys, return manual replacement
+    if not GROQ_KEYS:
+        return original_sub.replace("{app_name}", app_name), final_body
+
+    # Ask AI ONLY to rewrite the Subject Line
+    for i in range(len(GROQ_KEYS)):
+        api_key = get_next_api_key()
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        
+        prompt = (
+            f"Rewrite this email subject to make it unique and avoid spam filters. "
+            f"Keep the meaning same. Include the app name '{app_name}' if it fits naturally.\n"
+            f"Original Subject: {original_sub}\n\n"
+            f"OUTPUT FORMAT: Return ONLY the new subject line, nothing else."
         )
 
         payload = {
             "model": "llama-3.3-70b-versatile", 
             "messages":[{"role": "user", "content": prompt}], 
-            "temperature": 0.7
+            "temperature": 0.7,
+            "max_tokens": 50 # Limit tokens to make it super fast
         }
 
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
             if response.status_code == 200:
                 res_json = response.json()
-                text = res_json['choices'][0]['message']['content'].strip()
-                if "|||" in text:
-                    parts = text.split("|||")
-                    return parts[0].replace("Subject:", "").strip(), parts[1].replace("Body:", "").strip()
-            elif response.status_code == 429:
-                await notify_owner(context, f"Groq Key #{i+1} লিমিট শেষ (Rate Limit)। পরের কি ট্রাই করছি...")
-            else:
-                await notify_owner(context, f"Groq API এরর: {response.status_code}\nসার্ভার রেসপন্স চেক করা দরকার।")
+                new_sub = res_json['choices'][0]['message']['content'].strip().replace('"', '')
+                return new_sub, final_body
         except Exception as e:
             logger.error(f"AI Error: {e}")
         await asyncio.sleep(1)
 
-    # If all Groq keys fail, do manual replacement
-    return manual_replace(original_sub, original_body)
+    # Fallback if AI fails
+    return original_sub.replace("{app_name}", app_name), final_body
 
 # --- Helper Functions ---
 def get_gas_url(context):
