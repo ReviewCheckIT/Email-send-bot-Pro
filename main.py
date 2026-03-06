@@ -101,15 +101,16 @@ def get_next_api_key():
 
 async def rewrite_email_with_ai(original_sub, original_body, target_data, context):
     """
-    AI Logic Updated to PREVENT HTML CUT-OFF & ADD APP ICON:
-    1. Python handles the entire HTML replacement (100% safe, fast, and no truncation).
-    2. AI is ONLY used to rewrite the subject line to avoid spam.
+    AI Logic Updated to PREVENT HTML CUT-OFF & FIX BROKEN IMAGES
     """
     # Extract basic app data
     app_name = target_data.get('app_name', 'Your App')
     
-    # 🌟 NEW: Extract App Icon (with fallback image if not found)
-    app_icon = target_data.get('icon', 'https://cdn-icons-png.flaticon.com/128/2267/2267777.png')
+    # 🌟 STRICT ICON CHECK: If icon is missing/empty (old leads), use default icon
+    app_icon = target_data.get('icon')
+    if not app_icon or app_icon == 'N/A' or str(app_icon).strip() == '':
+        # Default professional app icon
+        app_icon = 'https://cdn-icons-png.flaticon.com/128/2267/2267777.png'
     
     # Format Score to exactly 1 decimal place (e.g. 3.7878 -> 3.8)
     try:
@@ -144,7 +145,7 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
     else:
         pct_5 = pct_4 = pct_3 = pct_2 = pct_1 = "0"
 
-    # 🌟 ALWAYS DO HTML REPLACEMENT IN PYTHON (This prevents the code cut-off issue)
+    # ALWAYS DO HTML REPLACEMENT IN PYTHON
     final_body = original_body.replace("{app_name}", app_name) \
                               .replace("{app_icon}", app_icon) \
                               .replace("{score}", score) \
