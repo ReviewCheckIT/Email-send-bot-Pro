@@ -35,11 +35,17 @@ logger = logging.getLogger(__name__)
 # --- Environment Variables ---
 TOKEN = os.environ.get('EMAIL_BOT_TOKEN')
 OWNER_ID = os.environ.get('BOT_OWNER_ID')
-FB_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON')
-FB_URL = os.environ.get('FIREBASE_DATABASE_URL')
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 PORT = int(os.environ.get('PORT', '10000'))
 GAS_URL_ENV = os.environ.get('GAS_URL')
+
+# --- Firebase 1 (Main Leads DB) ---
+FB_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON')
+FB_URL = os.environ.get('FIREBASE_DATABASE_URL')
+
+# --- Firebase 2 (History / Sent Emails DB) ---
+FB_JSON_2 = os.environ.get('FIREBASE_CREDENTIALS_JSON_2')
+FB_URL_2 = os.environ.get('FIREBASE_DATABASE_URL_2')
 
 # Groq API Keys
 GROQ_KEYS_STR = os.environ.get('GROQ_API_KEYS', '') 
@@ -54,28 +60,45 @@ BOT_ID_PREFIX = TOKEN.split(':')[0] if TOKEN else "Unknown"
 async def notify_owner(context, message):
     """মালিককে সরাসরি টেলিগ্রামে সমস্যার কথা জানাবে"""
     try:
-        await context.bot.send_message(chat_id=OWNER_ID, text=f"⚠️ **বট এলার্ট!**\n\n{message}")
+        await context.bot.send_message(chat_id=OWNER_ID, text=f"⚠️ **বট এলার্ট!**\n\n{message}", parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Notification Error: {e}")
 
-# --- Firebase Initialization ---
+# --- Firebase Initialization (Dual Database) ---
 try:
     if not firebase_admin._apps:
+        # Initialize First Firebase (Main)
         if FB_JSON:
             try:
-                if os.path.exists(FB_JSON):
-                    cred = credentials.Certificate(FB_JSON)
-                else:
-                    cred_dict = json.loads(FB_JSON)
-                    cred = credentials.Certificate(cred_dict)
-                firebase_admin.initialize_app(cred, {'databaseURL': FB_URL})
-                logger.info(f"🔥 Firebase Connected: {BOT_ID_PREFIX}")
+                cred_dict = json.loads(FB_JSON) if FB_JSON.startswith("{") else FB_JSON
+                cred1 = credentials.Certificate(cred_dict) if isinstance(cred_dict, dict) else credentials.Certificate(FB_JSON)
+                firebase_admin.initialize_app(cred1, {'databaseURL': FB_URL})
+                logger.info(f"🔥 First Firebase Connected: {BOT_ID_PREFIX}")
             except Exception as e:
-                logger.error(f"❌ Firebase Auth Error: {e}")
+                logger.error(f"❌ First Firebase Auth Error: {e}")
+        
+        # Initialize Second Firebase (History DB)
+        if FB_JSON_2 and FB_URL_2:
+            try:
+                cred2_dict = json.loads(FB_JSON_2) if FB_JSON_2.startswith("{") else FB_JSON_2
+                cred2 = credentials.Certificate(cred2_dict) if isinstance(cred2_dict, dict) else credentials.Certificate(FB_JSON_2)
+                firebase_admin.initialize_app(cred2, {'databaseURL': FB_URL_2}, name='history_db')
+                logger.info("🔥 Second Firebase (History) Connected!")
+            except Exception as e:
+                logger.error(f"❌ Second Firebase Auth Error: {e}")
         else:
-            logger.warning("⚠️ FIREBASE_CREDENTIALS_JSON missing!")
+            logger.warning("⚠️ Second Firebase Variables missing! Duplicate check will be skipped.")
+
 except Exception as e:
     logger.error(f"❌ Firebase Init Error: {e}")
+
+def get_history_db():
+    """Returns the reference to the second database if connected"""
+    try:
+        app2 = firebase_admin.get_app('history_db')
+        return app2
+    except:
+        return None
 
 def is_owner(uid):
     return str(uid) == str(OWNER_ID)
@@ -106,16 +129,13 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
     """
     AI Logic Updated to PREVENT HTML CUT-OFF & FETCH LIVE APP ICON USING APP_ID
     """
-    # Extract basic app data
     app_name = target_data.get('app_name', 'Your App')
     app_id = target_data.get('app_id', '')
     app_icon = target_data.get('icon', '')
 
-    # 🌟 LIVE ICON FETCH LOGIC: If icon is missing, fetch it live from Play Store using app_id
     if not app_icon or app_icon == 'N/A' or str(app_icon).strip() == '':
         if app_id and app_id != 'N/A':
             try:
-                # Fetch app details live from Play Store
                 app_info = await asyncio.to_thread(play_app, app_id, lang='en', country='us')
                 app_icon = app_info.get('icon', 'https://cdn-icons-png.flaticon.com/128/2267/2267777.png')
             except Exception as e:
@@ -124,7 +144,6 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
         else:
             app_icon = 'https://cdn-icons-png.flaticon.com/128/2267/2267777.png'
     
-    # Format Score to exactly 1 decimal place (e.g. 3.7878 -> 3.8)
     try:
         raw_score = float(target_data.get('score', 0.0))
         score = f"{raw_score:.1f}"
@@ -140,14 +159,12 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
     total_ratings = str(total_ratings_raw)
     installs = str(target_data.get('installs', '0'))
     
-    # Extract individual ratings
     r5 = int(target_data.get('ratings_5', 0))
     r4 = int(target_data.get('ratings_4', 0))
     r3 = int(target_data.get('ratings_3', 0))
     r2 = int(target_data.get('ratings_2', 0))
     r1 = int(target_data.get('ratings_1', 0))
     
-    # Calculate percentages for the HTML progress bar width
     if total_ratings_raw > 0:
         pct_5 = str(int((r5 / total_ratings_raw) * 100))
         pct_4 = str(int((r4 / total_ratings_raw) * 100))
@@ -157,7 +174,6 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
     else:
         pct_5 = pct_4 = pct_3 = pct_2 = pct_1 = "0"
 
-    # ALWAYS DO HTML REPLACEMENT IN PYTHON
     final_body = original_body.replace("{app_name}", app_name) \
                               .replace("{app_icon}", app_icon) \
                               .replace("{score}", score) \
@@ -169,15 +185,12 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
                               .replace("{pct_2}", pct_2) \
                               .replace("{pct_1}", pct_1)
 
-    # Append unique signature to avoid spam
     unique_id = random.randint(1000, 9999)
     final_body += f"<br><br><small style='color:#f4f6f8; font-size: 1px;'>Ref: {unique_id}</small>"
 
-    # If no AI keys, return manual replacement
     if not GROQ_KEYS:
         return original_sub.replace("{app_name}", app_name), final_body
 
-    # Ask AI ONLY to rewrite the Subject Line
     for i in range(len(GROQ_KEYS)):
         api_key = get_next_api_key()
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -194,7 +207,7 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
             "model": "llama-3.3-70b-versatile", 
             "messages":[{"role": "user", "content": prompt}], 
             "temperature": 0.7,
-            "max_tokens": 50 # Limit tokens to make it super fast
+            "max_tokens": 50 
         }
 
         try:
@@ -207,7 +220,6 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
             logger.error(f"AI Error: {e}")
         await asyncio.sleep(1)
 
-    # Fallback if AI fails
     return original_sub.replace("{app_name}", app_name), final_body
 
 # --- Helper Functions ---
@@ -233,10 +245,16 @@ async def call_gas_api(payload, context):
         await notify_owner(context, f"GAS কানেকশন ফেইল্ড: {str(e)}")
         return {"status": "error"}
 
+def get_safe_key(email):
+    """Make email safe for Firebase key"""
+    if not email: return "unknown"
+    return str(email).replace('.', '_').replace('@', '_at_').replace('#', '').replace('$', '').replace('[', '').replace(']', '')
+
 # --- Background Worker ---
 async def email_worker(context: ContextTypes.DEFAULT_TYPE):
     global IS_SENDING
     chat_id = context.job.chat_id
+    history_app = get_history_db()
     
     try:
         config = db.reference('shared_config/email_template').get()
@@ -259,17 +277,40 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
             await notify_owner(context, "ডেটাবেজে কোনো ইমেইল লিস্ট (scraped_emails) নেই!")
             break
         
-        # Find next pending lead (processing_by is None)
+        # Find next pending lead
         target_key = next((k for k, v in all_leads.items() if v.get('processing_by') is None), None)
         if not target_key:
             await context.bot.send_message(chat_id, "🏁 সব ইমেইল পাঠানো শেষ হয়েছে।")
             break
 
+        target_data = all_leads[target_key]
+        target_email = target_data.get('email', '')
+        safe_email_key = get_safe_key(target_email)
+
+        # ==========================================
+        # 🌟 NEW: Duplicate Check from Firebase 2
+        # ==========================================
+        is_duplicate = False
+        if history_app:
+            history_ref = db.reference('sent_history', app=history_app)
+            try:
+                # Check if email exists in second database
+                if history_ref.child(safe_email_key).get():
+                    is_duplicate = True
+            except Exception as e:
+                logger.error(f"History DB Read Error: {e}")
+
+        if is_duplicate:
+            logger.info(f"Duplicate email found: {target_email}. Skipping...")
+            # ডুপ্লিকেট হলে মেইন ডাটাবেজ থেকে ডিলিট করে পরেরটাতে চলে যাবে (সময় নষ্ট করবে না)
+            leads_ref.child(target_key).delete()
+            await asyncio.sleep(2)
+            continue
+
         # Mark as processing
         leads_ref.child(target_key).update({'processing_by': BOT_ID_PREFIX})
-        target_data = all_leads[target_key]
         
-        # Get AI Rewritten Content (Passing full target_data)
+        # Get AI Rewritten Content
         final_sub, final_body = await rewrite_email_with_ai(
             config.get('subject'), 
             config.get('body'), 
@@ -280,15 +321,28 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
         # Send via GAS
         res = await call_gas_api({
             "action": "sendEmail", 
-            "to": target_data.get('email'), 
+            "to": target_email, 
             "subject": final_sub, 
             "body": final_body
         }, context)
         
         if res.get("status") == "success":
-            leads_ref.child(target_key).delete()  # lead removed from DB
+            # ==========================================
+            # 🌟 NEW: Save to Firebase 2 & Delete from Firebase 1
+            # ==========================================
+            if history_app:
+                try:
+                    # সমস্ত ডাটা কপি করে টাইমস্ট্যাম্প সহ দ্বিতীয় ফায়ারবেসে সেভ করা হচ্ছে
+                    target_data['sent_at'] = datetime.now().isoformat()
+                    target_data['sent_by_bot'] = BOT_ID_PREFIX
+                    history_ref.child(safe_email_key).set(target_data)
+                except Exception as e:
+                    logger.error(f"History DB Save Error: {e}")
             
-            # Increment sent count (atomically)
+            # প্রথম ডাটাবেজ থেকে মুছে ফেলা হচ্ছে
+            leads_ref.child(target_key).delete()  
+            
+            # Increment sent count
             counter_ref = db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count')
             counter_ref.transaction(lambda current: (current or 0) + 1)
             
@@ -296,7 +350,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(random.randint(300, 360))
         else:
             leads_ref.child(target_key).update({'processing_by': None})
-            await notify_owner(context, f"ইমেইল পাঠাতে ব্যর্থ: {target_data.get('email')}\nGAS স্ক্রিপ্ট লগ চেক করুন।")
+            await notify_owner(context, f"ইমেইল পাঠাতে ব্যর্থ: {target_email}\nGAS স্ক্রিপ্ট লগ চেক করুন।")
             await asyncio.sleep(60)
 
     IS_SENDING = False
@@ -304,8 +358,12 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
-    await update.message.reply_text(f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],[InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],[InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],[InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],[InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],[InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]
-    ]))
+    await update.message.reply_text(
+        f"🤖 **বট অনলাইন**\nBot ID: {BOT_ID_PREFIX}", 
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 শুরু করুন", callback_data='btn_start_send')],[InlineKeyboardButton("🛑 বন্ধ করুন", callback_data='btn_stop_send')],
+            [InlineKeyboardButton("📊 রিপোর্ট", callback_data='btn_stats')],[InlineKeyboardButton("📧 স্পাম চেক", callback_data='btn_spam_check')],[InlineKeyboardButton("🗑️ সেন্ড মেইল মুছুন", callback_data='btn_delete_sent')],[InlineKeyboardButton("🔄 Reset Count", callback_data='btn_reset_count')]
+        ])
+    )
 
 async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global IS_SENDING
@@ -330,38 +388,26 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
             leads = db.reference('scraped_emails').get() or {}
             counter_ref = db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count')
             sent = counter_ref.get() or 0
-            await query.message.reply_text(f"📊 স্ট্যাটাস: মোট ইমেইল {len(leads)}, পাঠানো হয়েছে {sent}")
-        except:
-            await notify_owner(context, "স্ট্যাটাস দেখাতে সমস্যা হচ্ছে। ফায়ারবেস কানেকশন চেক করুন.")
+            
+            msg = f"📊 স্ট্যাটাস:\n\nঅপেক্ষমান ইমেইল: {len(leads)}\nপাঠানো হয়েছে: {sent}"
+            
+            # Show DB2 stats if connected
+            history_app = get_history_db()
+            if history_app:
+                history_ref = db.reference('sent_history', app=history_app)
+                history_data = history_ref.get() or {}
+                msg += f"\n\n📂 হিস্ট্রি ডাটাবেজে সংরক্ষিত মেইল: {len(history_data)}"
+                
+            await query.message.reply_text(msg)
+        except Exception as e:
+            await notify_owner(context, f"স্ট্যাটাস দেখাতে সমস্যা হচ্ছে: {e}")
             
     elif query.data == 'btn_spam_check':
         context.user_data['awaiting_test_email'] = True
         await query.message.reply_text("📧 আপনার টেস্ট ইমেইল এড্রেসটি লিখুন (যেমন: myemail@gmail.com):")
 
     elif query.data == 'btn_delete_sent':
-        await query.message.reply_text("🗑️ সেন্ড হওয়া মেইল খোঁজা হচ্ছে এবং ডিলিট করা হচ্ছে...")
-        try:
-            leads_ref = db.reference('scraped_emails')
-            all_leads = leads_ref.get()
-            
-            if not all_leads:
-                await query.message.reply_text("⚠️ ডাটাবেজে কোনো মেইল নেই।")
-                return
-
-            keys_to_delete =[k for k, v in all_leads.items() if v.get('status') == 'sent']
-            
-            if not keys_to_delete:
-                await query.message.reply_text("⚠️ ডিলিট করার মতো কোনো 'Sent' মেইল পাওয়া যায়নি।")
-                return
-
-            updates = {key: None for key in keys_to_delete}
-            leads_ref.update(updates)
-            
-            await query.message.reply_text(f"✅ সফলভাবে **{len(keys_to_delete)}** টি সেন্ড মেইল ডিলিট করা হয়েছে।")
-            
-        except Exception as e:
-            logger.error(f"Delete Sent Emails Error: {e}")
-            await query.message.reply_text(f"❌ ডিলিট করতে সমস্যা হয়েছে: {str(e)}")
+        await query.message.reply_text("🗑️ এই বাটনটি এখন আর প্রয়োজন নেই, কারণ সফলভাবে পাঠানো মেইলগুলো অটোমেটিকভাবে দ্বিতীয় ফায়ারবেসে চলে যাচ্ছে এবং মেইন ডাটাবেজ থেকে রিমুভ হয়ে যাচ্ছে।")
 
     elif query.data == 'btn_reset_count':
         try:
