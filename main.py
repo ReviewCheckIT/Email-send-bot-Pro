@@ -177,9 +177,16 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
         api_key = get_next_api_key()
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        prompt = (f"Rewrite this email subject to make it unique and avoid spam filters. "
-                  f"Keep the meaning same. Include the app name '{app_name}' if it fits naturally.\n"
-                  f"Original Subject: {original_sub}\n\nOUTPUT FORMAT: Return ONLY the new subject line, nothing else.")
+        prompt = (
+    f"Act as a professional B2B email copywriter. Rewrite this email subject line for '{app_name}' "
+    f"to make it unique, fresh, and completely natural to avoid automated spam filters. "
+    f"STRICT RULES:\n"
+    f"1. Keep the exact core meaning (App performance, growth insights, or review).\n"
+    f"2. DO NOT use spam-trigger or exaggerated marketing words like 'Unlock', 'Exclusive', 'Boost', '100%', 'Guarantee', 'Urgent', or 'Free'.\n"
+    f"3. Must include the app name '{app_name}' naturally.\n"
+    f"4. Keep it short, clean, and professional (under 50 characters if possible).\n\n"
+    f"Original Subject: {original_sub}\n\n"
+    f"OUTPUT FORMAT: Return ONLY the new subject line, without quotes, labels, or extra text.")
         payload = {"model": "llama-3.3-70b-versatile", "messages":[{"role": "user", "content": prompt}], "temperature": 0.7, "max_tokens": 50}
 
         try:
