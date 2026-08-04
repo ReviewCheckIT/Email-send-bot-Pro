@@ -9,6 +9,8 @@ import requests
 import time
 import csv
 import io
+import re  # 🟢 NEW: Regular expression for email format check
+import dns.resolver  # 🟢 NEW: For checking MX records
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -63,9 +65,33 @@ RETARGET_CAMPAIGN_ID = f"camp_{int(time.time())}"  # রি-মার্কে�
 # --- Helper: Send Direct Error to Owner ---
 async def notify_owner(context, message):
     try:
-        await context.bot.send_message(chat_id=OWNER_ID, text=f"⚠️ **বট এলার্ট!**\n\n{message}", parse_mode='Markdown')
+        await context.bot.send_message(chat_id=OWNER_ID, text=f"{message}", parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Notification Error: {e}")
+
+# 🟢 NEW: Email Verification Helper Function (Sync)
+def verify_email_domain_sync(email):
+    if not email or not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+        return False, "ভুল ইমেইল ফরম্যাট"
+    
+    domain = email.split('@')[1]
+    try:
+        records = dns.resolver.resolve(domain, 'MX')
+        if records:
+            return True, "Valid"
+    except dns.resolver.NXDOMAIN:
+        return False, "ডোমেইনটির কোনো অস্তিত্ব নেই"
+    except dns.resolver.NoAnswer:
+        return False, "ডোমেইনে কোনো মেইল সার্ভার (MX Record) নেই"
+    except Exception as e:
+        return False, "সার্ভার কানেকশন সমস্যা"
+        
+    return False, "Unknown Error"
+
+# 🟢 NEW: Async wrapper for Email Verification (বট যেন হ্যাং না করে)
+async def verify_email_domain(email):
+    return await asyncio.to_thread(verify_email_domain_sync, email)
+
 
 # --- Firebase Initialization (Dual Database) ---
 try:
@@ -154,7 +180,6 @@ async def rewrite_email_with_ai(original_sub, original_body, target_data, contex
     else:
         pct_5 = pct_4 = pct_3 = pct_2 = pct_1 = "0"
 
-    # 🟢 UPDATE 4: Added {app_id} replacement logic
     final_body = original_body.replace("{app_name}", app_name) \
                               .replace("{app_id}", app_id) \
                               .replace("{app_icon}", app_icon) \
@@ -209,7 +234,7 @@ def get_gas_url(context):
 async def call_gas_api(payload, context):
     url = get_gas_url(context)
     if not url:
-        await notify_owner(context, "GAS URL খুঁজে পাওয়া যায়নি! ডাটাবেজ বা ENV চেক করুন।")
+        await notify_owner(context, "⚠️ GAS URL খুঁজে পাওয়া যায়নি! ডাটাবেজ বা ENV চেক করুন।")
         return {"status": "error"}
     try:
         response = requests.post(url, json=payload, timeout=60)
@@ -226,13 +251,13 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
     global IS_SENDING
     chat_id = context.job.chat_id
     history_app = get_history_db()
-    is_first_email = True # 🟢 UPDATE 3: Mission Start Tracker
+    is_first_email = True 
     
     try:
         config = db.reference('shared_config/email_template').get()
         leads_ref = db.reference('scraped_emails')
         if not config:
-            await notify_owner(context, "ইমেইল টেম্পলেট নেই। /set_email কমান্ড দিন।")
+            await notify_owner(context, "⚠️ ইমেইল টেম্পলেট নেই। /set_email কমান্ড দিন।")
             IS_SENDING = False
             return
     except:
@@ -244,7 +269,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
     while IS_SENDING:
         all_leads = leads_ref.get()
         if not all_leads:
-            await notify_owner(context, "ডাটাবেজে কোনো ইমেইল লিস্ট নেই!")
+            await notify_owner(context, "🏁 ডাটাবেজে কোনো ইমেইল লিস্ট নেই!")
             break
         
         target_key = next((k for k, v in all_leads.items() if v.get('processing_by') is None), None)
@@ -270,11 +295,23 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
             continue
 
         leads_ref.child(target_key).update({'processing_by': BOT_ID_PREFIX})
+        
+        # 🟢 NEW: Email Verification Logic Before Sending (Main DB)
+        is_valid_email, reject_reason = await verify_email_domain(target_email)
+        if not is_valid_email:
+            app_name = target_data.get('app_name', 'Unknown App')
+            alert_msg = f"🚫 **ডেড ইমেইল স্কিপ করা হয়েছে!**\n\n*App Name:* {app_name}\n*Email:* `{target_email}`\n*সমস্যা:* {reject_reason}\n\n_(এই ইমেইলটি পাঠানো হয়নি এবং মেইন ডাটাবেজ থেকে মুছে দেওয়া হয়েছে)_"
+            await notify_owner(context, alert_msg)
+            
+            leads_ref.child(target_key).delete()  # ডিলিট করে দিচ্ছি যেন পরে আর ট্রাই না করে
+            await asyncio.sleep(2)
+            continue
+        # -------------------------------------------------------------
+
         final_sub, final_body = await rewrite_email_with_ai(config.get('subject'), config.get('body'), target_data, context)
         
         res = await call_gas_api({"action": "sendEmail", "to": target_email, "subject": final_sub, "body": final_body}, context)
         
-        # 🟢 UPDATE 3: First email confirmation logic
         if is_first_email:
             status_msg = "সফল" if res.get("status") == "success" else "ব্যর্থ"
             await context.bot.send_message(chat_id, f"🚀 **কাজ শুরু হয়েছে!**\nপ্রথম ইমেইল পাঠানোর চেষ্টা ({status_msg}) সম্পন্ন হয়েছে।")
@@ -292,7 +329,6 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
             db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count').transaction(lambda current: (current or 0) + 1)
             await asyncio.sleep(random.randint(300, 360))
         else:
-            # 🟢 UPDATE 2: Stop script immediately if GAS limit reached or gives error
             IS_SENDING = False
             leads_ref.child(target_key).update({'processing_by': None})
             await notify_owner(context, "🛑 **GAS API Error / Limit Reached!**\nমেইল সেন্ডিং বন্ধ করা হয়েছে। দয়া করে নতুন GAS URL ড্যাশবোর্ড থেকে সেট করুন।")
@@ -305,7 +341,7 @@ async def retarget_worker(context: ContextTypes.DEFAULT_TYPE):
     global IS_RETARGETING, RETARGET_CAMPAIGN_ID
     chat_id = context.job.chat_id
     history_app = get_history_db()
-    is_first_email = True # 🟢 UPDATE 3: Mission Start Tracker
+    is_first_email = True 
     
     if not history_app:
         await context.bot.send_message(chat_id, "⚠️ দ্বিতীয় ফায়ারবেস (History DB) কানেক্ট করা নেই!")
@@ -327,7 +363,7 @@ async def retarget_worker(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, "⚠️ হিস্ট্রি ডাটাবেজে কোনো ইমেইল নেই!")
             break
         
-        target_key = next((k for k, v in all_history.items() if v.get('retarget_campaign') != RETARGET_CAMPAIGN_ID), None)
+        target_key = next((k for k, v in all_history.items() if v.get('retarget_campaign') != RETARGET_CAMPAIGN_ID and v.get('status') != 'dead'), None)
         
         if not target_key:
             await context.bot.send_message(chat_id, "🏁 হিস্ট্রি ডাটাবেজের সবাইকে মেইল পাঠানো শেষ!")
@@ -336,10 +372,24 @@ async def retarget_worker(context: ContextTypes.DEFAULT_TYPE):
         target_data = all_history[target_key]
         target_email = target_data.get('email', '')
 
+        # 🟢 NEW: Email Verification Logic Before Sending (History DB)
+        is_valid_email, reject_reason = await verify_email_domain(target_email)
+        if not is_valid_email:
+            app_name = target_data.get('app_name', 'Unknown App')
+            alert_msg = f"🚫 **রি-মার্কেটিং ডেড ইমেইল স্কিপ!**\n\n*App Name:* {app_name}\n*Email:* `{target_email}`\n*সমস্যা:* {reject_reason}\n\n_(এই ইমেইলটিকে 'dead' মার্ক করা হয়েছে)_"
+            await notify_owner(context, alert_msg)
+            
+            history_ref.child(target_key).update({
+                'retarget_campaign': RETARGET_CAMPAIGN_ID,
+                'status': 'dead' # ডেড মার্ক করে রাখলাম যেন ভবিষ্যতে আর ট্রাই না করে
+            })
+            await asyncio.sleep(2)
+            continue
+        # -------------------------------------------------------------
+
         final_sub, final_body = await rewrite_email_with_ai(config.get('subject'), config.get('body'), target_data, context)
         res = await call_gas_api({"action": "sendEmail", "to": target_email, "subject": final_sub, "body": final_body}, context)
         
-        # 🟢 UPDATE 3: First email confirmation logic
         if is_first_email:
             status_msg = "সফল" if res.get("status") == "success" else "ব্যর্থ"
             await context.bot.send_message(chat_id, f"🚀 **রি-মার্কেটিং কাজ শুরু হয়েছে!**\nপ্রথম ইমেইল এটেম্পট ({status_msg}) সম্পন্ন।")
@@ -353,7 +403,6 @@ async def retarget_worker(context: ContextTypes.DEFAULT_TYPE):
             })
             await asyncio.sleep(random.randint(300, 360))
         else:
-            # 🟢 UPDATE 2: Stop script immediately if GAS limit reached or gives error
             IS_RETARGETING = False
             await notify_owner(context, "🛑 **GAS API Error / Limit Reached!**\nরি-মার্কেটিং বন্ধ করা হয়েছে। দয়া করে নতুন GAS URL সেট করুন।")
             break
@@ -364,7 +413,6 @@ async def retarget_worker(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
     
-    # 🟢 UPDATE 2: Show current GAS URL in dashboard
     current_gas = get_gas_url(context)
     gas_status = current_gas if current_gas else "Not Set"
     
@@ -385,7 +433,6 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    # --- Main DB Actions ---
     if query.data == 'btn_start_send':
         if not IS_SENDING:
             IS_SENDING = True
@@ -409,7 +456,6 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("📧 আপনার টেস্ট ইমেইল এড্রেসটি লিখুন (ডাটাবেজ থেকে কোনো ডেটা ডিলিট হবে না):")
 
     elif query.data == 'btn_set_gas':
-        # 🟢 UPDATE 2: Enable input mode for GAS URL
         context.user_data['awaiting_gas_url'] = True
         await query.message.reply_text("🔗 আপনার নতুন Google Apps Script (GAS) Web App URL টি বটের ইনবক্সে পেস্ট করুন:")
 
@@ -417,7 +463,6 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count').set(0)
         await query.message.reply_text("✅ Sent count reset to 0.")
 
-    # --- History DB (Firebase 2) Menu ---
     elif query.data == 'btn_history_menu':
         keyboard = [[InlineKeyboardButton("📊 হিস্ট্রি স্ট্যাটাস", callback_data='btn_history_stats')],
             [InlineKeyboardButton("📥 হিস্ট্রি ডাউনলোড (CSV)", callback_data='btn_history_dl')],[InlineKeyboardButton("♻️ রি-মার্কেটিং শুরু", callback_data='btn_start_retarget')],[InlineKeyboardButton("🛑 রি-মার্কেটিং বন্ধ", callback_data='btn_stop_retarget')],[InlineKeyboardButton("🔙 মেইন মেনু", callback_data='btn_back_main')]
@@ -481,7 +526,6 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_spam_check_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id): return
     
-    # 🟢 UPDATE 2: Save new GAS URL
     if context.user_data.get('awaiting_gas_url'):
         new_url = update.message.text.strip()
         if new_url.startswith("http"):
@@ -492,7 +536,6 @@ async def handle_spam_check_email(update: Update, context: ContextTypes.DEFAULT_
         context.user_data['awaiting_gas_url'] = False
         return
 
-    # 🟢 UPDATE 1: Spam Check modified to NOT delete or modify database leads
     if context.user_data.get('awaiting_test_email'):
         test_email = update.message.text.strip()
         context.user_data['awaiting_test_email'] = False
@@ -504,7 +547,6 @@ async def handle_spam_check_email(update: Update, context: ContextTypes.DEFAULT_
                 await update.message.reply_text("⚠️ মেইন ডাটাবেজে কোনো লিড নেই। টেস্ট করার জন্য অন্তত একটি লিড থাকতে হবে।")
                 return
             
-            # Find a pending lead without modifying it
             target_key = next((k for k, v in all_leads.items() if v.get('processing_by') is None), None)
             if not target_key:
                 await update.message.reply_text("⚠️ কোনো পেন্ডিং লিড পাওয়া যায়নি।")
