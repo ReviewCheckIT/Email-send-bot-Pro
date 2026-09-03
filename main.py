@@ -9,8 +9,8 @@ import requests
 import time
 import csv
 import io
-import re  # 🟢 NEW: Regular expression for email format check
-import dns.resolver  # 🟢 NEW: For checking MX records
+import re  
+import dns.resolver  
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -60,7 +60,7 @@ IS_SENDING = False
 IS_RETARGETING = False
 CURRENT_KEY_INDEX = 0
 BOT_ID_PREFIX = TOKEN.split(':')[0] if TOKEN else "Unknown"
-RETARGET_CAMPAIGN_ID = f"camp_{int(time.time())}"  # রি-মার্কেটিং ট্র্যাক করার জন্য
+RETARGET_CAMPAIGN_ID = f"camp_{int(time.time())}"  
 
 # --- Helper: Send Direct Error to Owner ---
 async def notify_owner(context, message):
@@ -69,7 +69,7 @@ async def notify_owner(context, message):
     except Exception as e:
         logger.error(f"Notification Error: {e}")
 
-# 🟢 NEW: Email Verification Helper Function (Sync)
+# 🟢 Email Verification Helper Function (Sync)
 def verify_email_domain_sync(email):
     if not email or not re.match(r"[^@]+@[^@]+\.[^@]+", email):
         return False, "ভুল ইমেইল ফরম্যাট"
@@ -88,15 +88,13 @@ def verify_email_domain_sync(email):
         
     return False, "Unknown Error"
 
-# 🟢 NEW: Async wrapper for Email Verification (বট যেন হ্যাং না করে)
+# 🟢 Async wrapper for Email Verification
 async def verify_email_domain(email):
     return await asyncio.to_thread(verify_email_domain_sync, email)
-
 
 # --- Firebase Initialization (Dual Database) ---
 try:
     if not firebase_admin._apps:
-        # Initialize First Firebase (Main)
         if FB_JSON:
             try:
                 cred_dict = json.loads(FB_JSON) if FB_JSON.startswith("{") else FB_JSON
@@ -106,7 +104,6 @@ try:
             except Exception as e:
                 logger.error(f"❌ First Firebase Auth Error: {e}")
         
-        # Initialize Second Firebase (History DB)
         if FB_JSON_2 and FB_URL_2:
             try:
                 cred2_dict = json.loads(FB_JSON_2) if FB_JSON_2.startswith("{") else FB_JSON_2
@@ -296,17 +293,16 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
 
         leads_ref.child(target_key).update({'processing_by': BOT_ID_PREFIX})
         
-        # 🟢 NEW: Email Verification Logic Before Sending (Main DB)
+        # Email Verification Logic Before Sending (Main DB)
         is_valid_email, reject_reason = await verify_email_domain(target_email)
         if not is_valid_email:
             app_name = target_data.get('app_name', 'Unknown App')
             alert_msg = f"🚫 **ডেড ইমেইল স্কিপ করা হয়েছে!**\n\n*App Name:* {app_name}\n*Email:* `{target_email}`\n*সমস্যা:* {reject_reason}\n\n_(এই ইমেইলটি পাঠানো হয়নি এবং মেইন ডাটাবেজ থেকে মুছে দেওয়া হয়েছে)_"
             await notify_owner(context, alert_msg)
             
-            leads_ref.child(target_key).delete()  # ডিলিট করে দিচ্ছি যেন পরে আর ট্রাই না করে
+            leads_ref.child(target_key).delete()  
             await asyncio.sleep(2)
             continue
-        # -------------------------------------------------------------
 
         final_sub, final_body = await rewrite_email_with_ai(config.get('subject'), config.get('body'), target_data, context)
         
@@ -322,6 +318,7 @@ async def email_worker(context: ContextTypes.DEFAULT_TYPE):
                 try:
                     target_data['sent_at'] = datetime.now().isoformat()
                     target_data['sent_by_bot'] = BOT_ID_PREFIX
+                    target_data['retarget_status'] = 'pending'  # নতুন ফিল্ড: পরবর্তীতে রি-মার্কেটিং এর জন্য পেন্ডিং থাকবে
                     history_ref.child(safe_email_key).set(target_data)
                 except: pass
             
@@ -355,7 +352,7 @@ async def retarget_worker(context: ContextTypes.DEFAULT_TYPE):
         IS_RETARGETING = False
         return
 
-    await context.bot.send_message(chat_id, "♻️ **রি-মার্কেটিং শুরু হয়েছে!**\nহিস্ট্রি ডাটাবেস থেকে রেন্ডম টাইমে মেইল পাঠানো হচ্ছে...")
+    await context.bot.send_message(chat_id, "♻️ **রি-মার্কেটিং শুরু হয়েছে!**\nহিস্ট্রি ডাটাবেস থেকে যেসব মেইল এখনো রি-মার্কেটিং করা হয়নি, সেখান থেকে পাঠানো হচ্ছে...")
 
     while IS_RETARGETING:
         all_history = history_ref.get()
@@ -363,16 +360,17 @@ async def retarget_worker(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, "⚠️ হিস্ট্রি ডাটাবেজে কোনো ইমেইল নেই!")
             break
         
-        target_key = next((k for k, v in all_history.items() if v.get('retarget_campaign') != RETARGET_CAMPAIGN_ID and v.get('status') != 'dead'), None)
+        # শুধুমাত্র ওইসব লিড সিলেক্ট করবে যেগুলোর retarget_status 'sent' বা 'dead' না
+        target_key = next((k for k, v in all_history.items() if v.get('retarget_status') != 'sent' and v.get('status') != 'dead'), None)
         
         if not target_key:
-            await context.bot.send_message(chat_id, "🏁 হিস্ট্রি ডাটাবেজের সবাইকে মেইল পাঠানো শেষ!")
+            await context.bot.send_message(chat_id, "🏁 হিস্ট্রি ডাটাবেজের সব পেন্ডিং রি-মার্কেটিং ইমেইল পাঠানো শেষ!")
             break
 
         target_data = all_history[target_key]
         target_email = target_data.get('email', '')
 
-        # 🟢 NEW: Email Verification Logic Before Sending (History DB)
+        # Email Verification Logic Before Sending (History DB)
         is_valid_email, reject_reason = await verify_email_domain(target_email)
         if not is_valid_email:
             app_name = target_data.get('app_name', 'Unknown App')
@@ -381,11 +379,10 @@ async def retarget_worker(context: ContextTypes.DEFAULT_TYPE):
             
             history_ref.child(target_key).update({
                 'retarget_campaign': RETARGET_CAMPAIGN_ID,
-                'status': 'dead' # ডেড মার্ক করে রাখলাম যেন ভবিষ্যতে আর ট্রাই না করে
+                'status': 'dead' 
             })
             await asyncio.sleep(2)
             continue
-        # -------------------------------------------------------------
 
         final_sub, final_body = await rewrite_email_with_ai(config.get('subject'), config.get('body'), target_data, context)
         res = await call_gas_api({"action": "sendEmail", "to": target_email, "subject": final_sub, "body": final_body}, context)
@@ -396,11 +393,16 @@ async def retarget_worker(context: ContextTypes.DEFAULT_TYPE):
             is_first_email = False
 
         if res.get("status") == "success":
+            # সফলভাবে পাঠানোর পর retarget_status কে 'sent' মার্ক করা হলো এবং কাউন্ট আপডেট করা হলো
             history_ref.child(target_key).update({
                 'retarget_campaign': RETARGET_CAMPAIGN_ID,
+                'retarget_status': 'sent',
                 'retarget_count': target_data.get('retarget_count', 0) + 1,
                 'last_retargeted_at': datetime.now().isoformat()
             })
+            # বট কনফিগে রি-মার্কেটিং সেন্ড কাউন্ট বৃদ্ধি করা হচ্ছে
+            db.reference(f'bot_configs/{BOT_ID_PREFIX}/retarget_sent_count').transaction(lambda current: (current or 0) + 1)
+            
             await asyncio.sleep(random.randint(300, 360))
         else:
             IS_RETARGETING = False
@@ -448,7 +450,8 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             leads = db.reference('scraped_emails').get() or {}
             sent = db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count').get() or 0
-            await query.message.reply_text(f"📊 মেইন ডাটাবেজ: অপেক্ষমান {len(leads)} টি, পাঠানো হয়েছে {sent} টি।")
+            retarget_sent = db.reference(f'bot_configs/{BOT_ID_PREFIX}/retarget_sent_count').get() or 0
+            await query.message.reply_text(f"📊 **রিপোর্ট স্ট্যাটাস:**\n- মেইন ডাটাবেজ অপেক্ষমান: {len(leads)} টি\n- মেইন পাঠানো হয়েছে: {sent} টি\n- রি-মার্কেটিং পাঠানো হয়েছে: {retarget_sent} টি")
         except: pass
             
     elif query.data == 'btn_spam_check':
@@ -461,19 +464,37 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == 'btn_reset_count':
         db.reference(f'bot_configs/{BOT_ID_PREFIX}/sent_count').set(0)
-        await query.message.reply_text("✅ Sent count reset to 0.")
+        db.reference(f'bot_configs/{BOT_ID_PREFIX}/retarget_sent_count').set(0)
+        await query.message.reply_text("✅ Sent counts reset to 0.")
 
     elif query.data == 'btn_history_menu':
-        keyboard = [[InlineKeyboardButton("📊 হিস্ট্রি স্ট্যাটাস", callback_data='btn_history_stats')],
-            [InlineKeyboardButton("📥 হিস্ট্রি ডাউনলোড (CSV)", callback_data='btn_history_dl')],[InlineKeyboardButton("♻️ রি-মার্কেটিং শুরু", callback_data='btn_start_retarget')],[InlineKeyboardButton("🛑 রি-মার্কেটিং বন্ধ", callback_data='btn_stop_retarget')],[InlineKeyboardButton("🔙 মেইন মেনু", callback_data='btn_back_main')]
+        keyboard = [
+            [InlineKeyboardButton("📊 হিস্ট্রি স্ট্যাটাস", callback_data='btn_history_stats')],
+            [InlineKeyboardButton("📥 হিস্ট্রি ডাউনলোড (CSV)", callback_data='btn_history_dl')],
+            [InlineKeyboardButton("♻️ রি-মার্কেটিং শুরু", callback_data='btn_start_retarget')],
+            [InlineKeyboardButton("🛑 রি-মার্কেটিং বন্ধ", callback_data='btn_stop_retarget')],
+            [InlineKeyboardButton("🔄 রিসেট রি-মার্কেটিং মার্ক", callback_data='btn_reset_retarget')], # নতুন বাটন
+            [InlineKeyboardButton("🔙 মেইন মেনু", callback_data='btn_back_main')]
         ]
-        await query.edit_message_text("📂 **হিস্ট্রি প্যানেল (Firebase 2)**\nএখান থেকে আপনি আপনার সেভ করা লিডসগুলো দেখতে এবং পুনরায় মেইল পাঠাতে পারবেন।", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        await query.edit_message_text("📂 **হিস্ট্রি প্যানেল (Firebase 2)**\nএখান থেকে আপনি আপনার সেভ করা লিডসগুলো দেখতে এবং পুনরায় রি-মার্কেটিং করতে পারবেন।", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
     elif query.data == 'btn_history_stats':
         history_app = get_history_db()
         if history_app:
-            data = db.reference('sent_history', app=history_app).get() or {}
-            await query.message.reply_text(f"📊 **হিস্ট্রি স্ট্যাটাস:**\nআপনার ২য় ডাটাবেজে মোট **{len(data)}** টি ইমেইল সুরক্ষিত আছে।", parse_mode='Markdown')
+            history_ref = db.reference('sent_history', app=history_app)
+            data = history_ref.get() or {}
+            
+            total_history = len(data)
+            sent_retarget_count = sum(1 for v in data.values() if v.get('retarget_status') == 'sent')
+            pending_retarget_count = sum(1 for v in data.values() if v.get('retarget_status') != 'sent' and v.get('status') != 'dead')
+            
+            await query.message.reply_text(
+                f"📊 **হিস্ট্রি স্ট্যাটাস:**\n"
+                f"- মোট সুরক্ষিত ইমেইল: **{total_history}** টি\n"
+                f"- রি-মার্কেটিং সম্পন্ন: **{sent_retarget_count}** টি\n"
+                f"- রি-মার্কেটিং বাকি (পেন্ডিং): **{pending_retarget_count}** টি", 
+                parse_mode='Markdown'
+            )
         else:
             await query.message.reply_text("⚠️ ২য় ফায়ারবেস কানেক্ট করা নেই।")
 
@@ -491,9 +512,9 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         si = io.StringIO()
         cw = csv.writer(si)
-        cw.writerow(['App Name', 'Email', 'Phone', 'Installs', 'Sent At', 'Retarget Count'])
+        cw.writerow(['App Name', 'Email', 'Phone', 'Installs', 'Sent At', 'Retarget Status', 'Retarget Count'])
         for k, v in data.items():
-            cw.writerow([v.get('app_name', 'N/A'), v.get('email', 'N/A'), v.get('phone', 'N/A'), v.get('installs', 'N/A'), v.get('sent_at', 'N/A'), v.get('retarget_count', 0)])
+            cw.writerow([v.get('app_name', 'N/A'), v.get('email', 'N/A'), v.get('phone', 'N/A'), v.get('installs', 'N/A'), v.get('sent_at', 'N/A'), v.get('retarget_status', 'pending'), v.get('retarget_count', 0)])
             
         output = io.BytesIO(si.getvalue().encode('utf-8'))
         output.name = f"History_DB_{datetime.now().strftime('%Y%m%d')}.csv"
@@ -511,6 +532,22 @@ async def button_tap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'btn_stop_retarget':
         IS_RETARGETING = False
         await query.message.reply_text("🛑 রি-মার্কেটিং বন্ধ করা হয়েছে।")
+
+    elif query.data == 'btn_reset_retarget':
+        # নতুন লজিক: সব হিস্ট্রি আইটেম থেকে retarget_status 'sent' স্ট্যাটাস মুছে ফেলবে যাতে পুনরায় আবার রি-মার্কেটিং করা যায়
+        history_app = get_history_db()
+        if history_app:
+            history_ref = db.reference('sent_history', app=history_app)
+            data = history_ref.get() or {}
+            if data:
+                for k, v in data.items():
+                    if v.get('retarget_status') == 'sent':
+                        history_ref.child(k).update({'retarget_status': 'pending'})
+                await query.message.reply_text("✅ রি-মার্কেটিং মার্ক সফলভাবে রিসেট করা হয়েছে! এখন চাইলে পুনরায় সবাইকে রি-মার্কেটিং মেইল পাঠাতে পারবেন।")
+            else:
+                await query.message.reply_text("⚠️ হিস্ট্রি ডাটাবেজ খালি।")
+        else:
+            await query.message.reply_text("⚠️ ২য় ফায়ারবেস কানেক্ট করা নেই।")
 
     elif query.data == 'btn_back_main':
         current_gas = get_gas_url(context)
